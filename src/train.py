@@ -23,6 +23,9 @@ def train():
     
     # 初始化模型
     model = PoseTransformer().to(device)
+
+    num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Total trainable parameters: {num_params / 1e6:.2f}M")
     
     # 损失函数和优化器
     criterion = nn.MSELoss()

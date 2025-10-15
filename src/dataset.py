@@ -50,7 +50,7 @@ class PoseDataset(Dataset):
             - masked_sequence (Tensor): 应用掩码后的序列。
             - mask (Tensor): 一个布尔张量，标记了哪些部分被掩盖 (True 表示被掩盖)。
             - original_sequence (Tensor): 原始的、未修改的序列。
-        """git 
+        """ 
         original_sequence = self.samples[idx]
         
         # 1. 复制原始序列用于创建掩码版本
