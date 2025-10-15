@@ -30,7 +30,9 @@ class PoseDataset(Dataset):
             with open(file_path, 'rb') as f:
                 keypoints_data = pickle.load(f)
             
-            num_frames = keypoints_data.shape[0]
+            # import ipdb; ipdb.set_trace()
+            
+            num_frames = len(keypoints_data)
             
             # 每次取一个完整的 sequence_length 作为样本
             for i in range(num_frames - self.sequence_length + 1):
@@ -48,7 +50,7 @@ class PoseDataset(Dataset):
             - masked_sequence (Tensor): 应用掩码后的序列。
             - mask (Tensor): 一个布尔张量，标记了哪些部分被掩盖 (True 表示被掩盖)。
             - original_sequence (Tensor): 原始的、未修改的序列。
-        """
+        """git 
         original_sequence = self.samples[idx]
         
         # 1. 复制原始序列用于创建掩码版本
