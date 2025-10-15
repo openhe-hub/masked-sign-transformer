@@ -1,0 +1,26 @@
+# Pose Transformer Project Configuration
+
+[data]
+data_dir = "./data/"          # pkl数据目录 (路径相对于项目根目录)
+sequence_length = 16          # 输入序列的长度（看过去多少帧）
+n_kps = 134                   # 每帧的关键点数量
+features_per_kp = 2           # 每个关键点的特征数 (x, y)
+
+[model]
+# d_model 必须能被 n_head 整除
+d_model = 512                 # Transformer的内部维度
+n_head = 8                    # 多头注意力的头数
+num_encoder_layers = 6        # Transformer编码器层数
+dim_feedforward = 2048        # 前馈网络的维度
+dropout = 0.1                 # Dropout比例
+
+[training]
+batch_size = 32
+learning_rate = 0.0001
+num_epochs = 100
+# device: "cuda", "cpu", or "auto" for automatic detection
+device = "auto"
+
+[masking]
+spatial_mask_ratio = 0.15     # 空间（关键点）掩码比例
+temporal_mask_ratio = 0.15    # 时间（帧）掩码比例
