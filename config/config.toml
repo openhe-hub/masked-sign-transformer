@@ -1,10 +1,10 @@
 # Pose Transformer Project Configuration
 
 [data]
-data_dir = "./data/dummy_data"          # pkl数据目录 (路径相对于项目根目录)
+data_dir = "./data/chatsign_200"          # pkl数据目录 (路径相对于项目根目录)
 sequence_length = 16          # 输入序列的长度（看过去多少帧）
-n_kps = 134                   # 每帧的关键点数量
-features_per_kp = 3           # 每个关键点的特征数 (x, y, confidence)
+n_kps = 128                   # 每帧的关键点数量
+features_per_kp = 2           # 每个关键点的特征数 (x, y) # confidence
 
 [model]
 # d_model 必须能被 n_head 整除
