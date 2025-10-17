@@ -34,7 +34,8 @@ class PoseTransformer(nn.Module):
         dim_feedforward = config['model']['dim_feedforward']
         dropout = config['model']['dropout']
         
-        input_features = n_kps * features_per_kp
+        self.model_features_per_kp =2
+        input_features = n_kps * self.model_features_per_kp
         
         self.input_projection = nn.Linear(input_features, d_model)
         self.pos_encoder = PositionalEncoding(d_model, dropout)
@@ -60,10 +61,10 @@ class PoseTransformer(nn.Module):
         
         # 1. Replace masked parts of the input with the learnable mask_token
         n_kps = config['data']['n_kps']
-        features_per_kp = config['data']['features_per_kp']
+        # features_per_kp = config['data']['features_per_kp']
         
-        expanded_mask = mask.unsqueeze(-1).expand(-1, -1, -1, features_per_kp)
-        expanded_mask = expanded_mask.reshape(src.shape[0], src.shape[1], n_kps * features_per_kp)
+        expanded_mask = mask.unsqueeze(-1).expand(-1, -1, -1, self.model_features_per_kp)
+        expanded_mask = expanded_mask.reshape(src.shape[0], src.shape[1], -1)
 
         src = torch.where(expanded_mask, self.mask_token.expand_as(src), src)
 

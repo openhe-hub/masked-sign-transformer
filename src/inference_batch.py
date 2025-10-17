@@ -54,7 +54,7 @@ def render_animation(sequences, titles, output_path, H=1080, W=1080, fps=2):
         
     video_writer.release()
 
-def inference(checkpoint_path, output_path="reconstructed_sequence.mp4", data_index=0):
+def inference(checkpoint_path, output_path="reconstructed_sequence.mp4", index_range=[0,100]):
     """
     Loads a model checkpoint, performs inference on a sample from the dataset,
     and saves the reconstructed animation.
@@ -76,54 +76,52 @@ def inference(checkpoint_path, output_path="reconstructed_sequence.mp4", data_in
 
     # Get a sample from the dataset
     dataset = PoseDataset()
-    if data_index >= len(dataset):
-        print(f"Error: data_index {data_index} is out of bounds for the dataset of size {len(dataset)}.")
-        return
+
+    for data_index in range(index_range[0], index_range[1]):
+        masked_sequence, mask, original_sequence = dataset[data_index]
+
+        # Add batch dimension and move to device
+        masked_sequence = masked_sequence.unsqueeze(0).to(device)
+        mask = mask.unsqueeze(0).to(device)
+
+        with torch.no_grad():
+            # Get model prediction for the full sequence
+            predictions = model(masked_sequence, mask)
+
+        # The model outputs the reconstructed sequence.
+        # For visualization, we want to fill in the masked parts of the input with the predictions.
         
-    masked_sequence, mask, original_sequence = dataset[data_index]
+        # Reshape mask to match sequence dimensions for easier processing
+        expanded_mask = mask.unsqueeze(-1).expand(-1, -1, -1, features_per_kp)
+        expanded_mask = expanded_mask.reshape(
+            predictions.shape[0], predictions.shape[1], n_kps * features_per_kp
+        )
 
-    # Add batch dimension and move to device
-    masked_sequence = masked_sequence.unsqueeze(0).to(device)
-    mask = mask.unsqueeze(0).to(device)
+        # Create reconstructed sequence
+        reconstructed_sequence = masked_sequence.clone()
+        reconstructed_sequence[expanded_mask] = predictions[expanded_mask]
 
-    with torch.no_grad():
-        # Get model prediction for the full sequence
-        predictions = model(masked_sequence, mask)
+        # Move to CPU and convert to numpy for visualization
+        reconstructed_sequence_np = reconstructed_sequence.squeeze(0).cpu().numpy()
+        original_sequence_np = original_sequence.numpy()
+        masked_sequence_np = masked_sequence.squeeze(0).cpu().numpy()
 
-    # The model outputs the reconstructed sequence.
-    # For visualization, we want to fill in the masked parts of the input with the predictions.
-    
-    # Reshape mask to match sequence dimensions for easier processing
-    expanded_mask = mask.unsqueeze(-1).expand(-1, -1, -1, features_per_kp)
-    expanded_mask = expanded_mask.reshape(
-        predictions.shape[0], predictions.shape[1], n_kps * features_per_kp
-    )
+        # Reshape the data from (seq_len, n_kps * features) to (seq_len, n_kps, features)
+        reconstructed_sequence_np = reconstructed_sequence_np.reshape(seq_len, n_kps, features_per_kp)
+        original_sequence_np = original_sequence_np.reshape(seq_len, n_kps, features_per_kp)
+        masked_sequence_np = masked_sequence_np.reshape(seq_len, n_kps, features_per_kp)
 
-    # Create reconstructed sequence
-    reconstructed_sequence = masked_sequence.clone()
-    reconstructed_sequence[expanded_mask] = predictions[expanded_mask]
+        # Set masked keypoints in the input to a position where they are not visible
+        masked_sequence_np[mask.squeeze(0).cpu().numpy()] = -1
 
-    # Move to CPU and convert to numpy for visualization
-    reconstructed_sequence_np = reconstructed_sequence.squeeze(0).cpu().numpy()
-    original_sequence_np = original_sequence.numpy()
-    masked_sequence_np = masked_sequence.squeeze(0).cpu().numpy()
-
-    # Reshape the data from (seq_len, n_kps * features) to (seq_len, n_kps, features)
-    reconstructed_sequence_np = reconstructed_sequence_np.reshape(seq_len, n_kps, features_per_kp)
-    original_sequence_np = original_sequence_np.reshape(seq_len, n_kps, features_per_kp)
-    masked_sequence_np = masked_sequence_np.reshape(seq_len, n_kps, features_per_kp)
-
-    # Set masked keypoints in the input to a position where they are not visible
-    masked_sequence_np[mask.squeeze(0).cpu().numpy()] = -1
-
-    print("Rendering animation...")
-    render_animation(
-        sequences=[original_sequence_np, masked_sequence_np, reconstructed_sequence_np],
-        output_path=f"output/result_{data_index}.mp4",
-        titles=['Original', 'Masked Input', 'Reconstructed']
-    )
-    
-    print(f"Reconstructed sequence saved to output/result_{data_index}.mp4")
+        print("Rendering animation...")
+        render_animation(
+            sequences=[original_sequence_np, masked_sequence_np, reconstructed_sequence_np],
+            output_path=f"output/result_{data_index}.mp4",
+            titles=['Original', 'Masked Input', 'Reconstructed']
+        )
+        
+        print(f"Reconstructed sequence saved to output/result_{data_index}.mp4")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Inference script for PoseTransformer")
@@ -131,8 +129,10 @@ if __name__ == "__main__":
                         help='Path to the model checkpoint (e.g., checkpoints/pose_transformer_mae_epoch_90.pth)')
     parser.add_argument('--output', type=str, default='output/reconstruction.mp4', 
                         help='Path to save the output video')
-    parser.add_argument('--index', type=int, default=0, 
+    parser.add_argument('--index_begin', type=int, default=0, 
+                        help='Index of the data sample to use for inference')
+    parser.add_argument('--index_end', type=int, default=100, 
                         help='Index of the data sample to use for inference')
     args = parser.parse_args()
 
-    inference(args.checkpoint, args.output, args.index)
+    inference(args.checkpoint, args.output, [args.index_begin, args.index_end])

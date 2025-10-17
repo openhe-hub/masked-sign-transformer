@@ -4,12 +4,14 @@ import numpy as np
 
 # params
 input_folder = 'data/pkl_files'
-output_folder = 'data/chatsign_200'
+output_folder = 'data/chatsign_200_conf'
 
 def handle_one_frame(data):
-    body_kps = data['bodies']['candidate']  # (18, 2)
-    face_kps = data['faces'][0] # (68, 2)
-    hand_kps = data['hands'].reshape(42, 2) # (42, 2)
+    if data['hands'].shape[0] > 2 or data['hands_score'].shape[0] > 2: return None
+
+    body_kps = np.hstack([data['bodies']['candidate'], data['bodies']['score'].T])
+    face_kps = np.hstack([data['faces'][0], data['faces_score'].T])
+    hand_kps = np.hstack([data['hands'].reshape(42, 2), data['hands_score'].reshape(42, 1)])
 
     all_kps = np.vstack([body_kps, face_kps, hand_kps])
     return all_kps
@@ -18,7 +20,8 @@ def handle_one_pkl(pkl):
     length = len(pkl)
     result = []
     for i in range(length):
-        result.append(handle_one_frame(pkl[i]))
+        all_kps = handle_one_frame(pkl[i])
+        if all_kps is not None: result.append(all_kps)
     return result
 
 if __name__ == "__main__":
