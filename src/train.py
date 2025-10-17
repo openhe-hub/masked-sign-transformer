@@ -7,70 +7,107 @@ import os
 from config_loader import config
 from dataset import PoseDataset
 from model import PoseTransformer
+# 导入我们新的损失函数
+from losses.losses import (
+    reconstruction_loss,
+    full_sequence_reconstruction_loss,
+    velocity_consistency_loss,
+    acceleration_consistency_loss,
+    bone_length_consistency_loss,
+    total_variation_loss
+)
 
 def train():
-    # 从配置中获取参数
+    # --- 从配置中获取所有参数 ---
     device = config['training']['device']
     batch_size = config['training']['batch_size']
     learning_rate = config['training']['learning_rate']
     num_epochs = config['training']['num_epochs']
     n_kps = config['data']['n_kps']
-    features_per_kp = 2 # config['data']['features_per_kp']
     
-    # 准备数据
+    # 获取损失权重
+    loss_weights = config['loss_weights']
+    
+    # 获取骨骼定义
+    skeleton_bones = config['skeleton']['bones']
+
+    model_features_per_kp = 2
+    
+    # --- 数据和模型准备 (不变) ---
     dataset = PoseDataset()
     train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-    
-    # 初始化模型
     model = PoseTransformer().to(device)
-
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Total trainable parameters: {num_params / 1e6:.2f}M")
     
-    # 损失函数和优化器
-    criterion = nn.MSELoss()
+    # --- 损失函数和优化器 (更新) ---
+    # 使用导师建议的Huber Loss作为重建损失
+    recon_criterion = nn.HuberLoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
     
     print(f"Start training on device: {device}")
     for epoch in range(num_epochs):
         model.train()
-        total_loss = 0
+        # 用于记录每个loss分量的字典
+        epoch_losses = {
+            'total': 0.0, 'recon': 0.0, 'vel': 0.0, 
+            'accel': 0.0, 'bone': 0.0, 'tv': 0.0
+        }
         
-        # --- Key Change: Unpack three items from the dataloader ---
-        for masked_sequence, mask, original_sequence in tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}"):
+        # 假设你的Dataset现在返回 (masked_seq, input_mask, original_seq, loss_mask)
+        for masked_sequence, input_mask, original_sequence in tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}"):
             masked_sequence = masked_sequence.to(device)
-            mask = mask.to(device)
+            input_mask = input_mask.to(device)
             original_sequence = original_sequence.to(device)
 
             optimizer.zero_grad()
             
-            # --- Key Change: Pass masked input and the mask to the model ---
-            predictions = model(masked_sequence, mask)
+            # --- 核心变化: 计算多目标损失 ---
+            predictions = model(masked_sequence, input_mask)
             
-            # --- Key Change: Calculate loss only on the masked parts ---
-            # Expand mask to match the feature dimension of the predictions
-            expanded_mask = mask.unsqueeze(-1).expand(-1, -1, -1, features_per_kp)
-            expanded_mask = expanded_mask.reshape(
-                predictions.shape[0], predictions.shape[1], n_kps * features_per_kp
-            )
+            # 1. 重建损失
+            loss_recon = full_sequence_reconstruction_loss(predictions, original_sequence, recon_criterion)
             
-            # Select only the elements that were masked
-            pred_masked = torch.masked_select(predictions, expanded_mask)
-            gt_masked = torch.masked_select(original_sequence, expanded_mask)
+            # --- 以下损失在整个序列上计算，以保证全局平滑性和一致性 ---
             
-            loss = criterion(pred_masked, gt_masked)
+            # 2. 速度一致性损失
+            loss_vel = velocity_consistency_loss(predictions, original_sequence, n_kps)
             
-            loss.backward()
+            # 3. 加速度一致性损失
+            loss_accel = acceleration_consistency_loss(predictions, original_sequence, n_kps)
+            
+            # 4. 骨骼长度一致性损失
+            # loss_bone = bone_length_consistency_loss(predictions, original_sequence, skeleton_bones, n_kps)
+            
+            # 5. 总变差正则化 (只作用于预测)
+            loss_tv = total_variation_loss(predictions, n_kps)
+
+            # --- 组合总损失 ---
+            total_loss = (loss_weights['lambda_recon'] * loss_recon +
+                          loss_weights['lambda_vel'] * loss_vel +
+                          loss_weights['lambda_accel'] * loss_accel +
+                        #   loss_weights['lambda_bone'] * loss_bone +
+                          loss_weights['lambda_tv'] * loss_tv)
+            
+            total_loss.backward()
             optimizer.step()
             
-            total_loss += loss.item()
-            
-        avg_loss = total_loss / len(train_loader)
-        print(f"Epoch {epoch+1} completed. Average Loss: {avg_loss:.6f}")
-        
-        # 保存模型
+            # 记录各个损失的值
+            epoch_losses['total'] += total_loss.item()
+            epoch_losses['recon'] += loss_recon.item()
+            epoch_losses['vel'] += loss_vel.item()
+            epoch_losses['accel'] += loss_accel.item()
+            # epoch_losses['bone'] += loss_bone.item()
+            epoch_losses['tv'] += loss_tv.item()
+
+        # 打印每个epoch的平均损失
+        num_batches = len(train_loader)
+        print(f"Epoch {epoch+1} completed. Losses:")
+        for loss_name, loss_val in epoch_losses.items():
+            print(f"  - Avg {loss_name}: {loss_val / num_batches:.6f}")
+
+        # --- 保存模型 (不变) ---
         if (epoch + 1) % 10 == 0:
-            # Use a path relative to the project root
             checkpoints_dir = "checkpoints"
             if not os.path.exists(checkpoints_dir):
                 os.makedirs(checkpoints_dir)

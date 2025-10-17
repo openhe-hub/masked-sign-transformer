@@ -9,7 +9,7 @@ from dataset import PoseDataset
 from utils.render import draw_pose
 import cv2
 
-def render_animation(sequences, titles, output_path, H=1080, W=1080, fps=2):
+def render_animation(sequences, titles, output_path, masks=None, H=1080, W=1080, fps=2):
     """
     Renders a side-by-side animation of multiple pose sequences.
     
@@ -18,6 +18,7 @@ def render_animation(sequences, titles, output_path, H=1080, W=1080, fps=2):
                                        Each sequence has shape (seq_len, n_kps, features).
         titles (list of str): List of titles for each sequence.
         output_path (str): Path to save the output video.
+        masks (list of np.ndarray or None): Optional list of masks. Each mask has shape (seq_len, n_kps).
         H (int): Height of the canvas for each individual render.
         W (int): Width of the canvas for each individual render.
         fps (int): Frames per second for the output video.
@@ -37,8 +38,11 @@ def render_animation(sequences, titles, output_path, H=1080, W=1080, fps=2):
     for t in range(seq_len):
         frames = []
         for i, seq in enumerate(sequences):
+            frame_mask = None
+            if masks and masks[i] is not None:
+                frame_mask = masks[i][t]
             # The draw_pose function returns a (C, H, W) numpy array, so we need to transpose it
-            pose_img = draw_pose(seq[t], H, W) # seq[t] is (n_kps, features)
+            pose_img = draw_pose(seq[t], H, W, mask=frame_mask) # seq[t] is (n_kps, features)
             pose_img = pose_img.transpose(1, 2, 0) # Convert to (H, W, C) for OpenCV
             pose_img = cv2.cvtColor(pose_img, cv2.COLOR_RGB2BGR) # Convert RGB to BGR for OpenCV
 
@@ -113,14 +117,17 @@ def inference(checkpoint_path, output_path="reconstructed_sequence.mp4", data_in
     original_sequence_np = original_sequence_np.reshape(seq_len, n_kps, features_per_kp)
     masked_sequence_np = masked_sequence_np.reshape(seq_len, n_kps, features_per_kp)
 
+    mask_np = mask.squeeze(0).cpu().numpy()
+
     # Set masked keypoints in the input to a position where they are not visible
-    masked_sequence_np[mask.squeeze(0).cpu().numpy()] = -1
+    masked_sequence_np[mask_np] = -1
 
     print("Rendering animation...")
     render_animation(
         sequences=[original_sequence_np, masked_sequence_np, reconstructed_sequence_np],
         output_path=f"output/result_{data_index}.mp4",
-        titles=['Original', 'Masked Input', 'Reconstructed']
+        titles=['Original', 'Masked Input', 'Reconstructed'],
+        masks=[None, None, mask_np]
     )
     
     print(f"Reconstructed sequence saved to output/result_{data_index}.mp4")
