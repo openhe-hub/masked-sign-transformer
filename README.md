@@ -1,5 +1,7 @@
-## Stage 1 (Single Direction): Based on MAE + Transformer
-### V0
+## Introduction
+
+## ChangeLog
+### V0: Based on MAE + Transformer
 * 2d kps feature (x, y)
 * position embedding
 * spatial-temporal mask

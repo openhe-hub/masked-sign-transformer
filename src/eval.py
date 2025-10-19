@@ -20,7 +20,7 @@ def evaluate(checkpoint_path):
     device = config['training']['device']
     batch_size = config['training']['batch_size']
     n_kps = config['data']['n_kps']
-    features_per_kp = config['data']['features_per_kp']
+    features_per_kp = 2 # config['data']['features_per_kp']
 
     # Load model
     model = PoseTransformer().to(device)

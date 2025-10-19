@@ -3,6 +3,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import os
+import argparse
 
 from config_loader import config
 from dataset import PoseDataset
@@ -24,6 +25,7 @@ def train():
     learning_rate = config['training']['learning_rate']
     num_epochs = config['training']['num_epochs']
     n_kps = config['data']['n_kps']
+    experiment_name = config['training']['experiment'] # 获取实验名称
     
     # 获取损失权重
     loss_weights = config['loss_weights']
@@ -46,6 +48,7 @@ def train():
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
     
     print(f"Start training on device: {device}")
+    print(f"Running experiment: {experiment_name}")
     for epoch in range(num_epochs):
         model.train()
         # 用于记录每个loss分量的字典
@@ -106,14 +109,64 @@ def train():
         for loss_name, loss_val in epoch_losses.items():
             print(f"  - Avg {loss_name}: {loss_val / num_batches:.6f}")
 
-        # --- 保存模型 (不变) ---
+        # --- 保存模型 (更新) ---
         if (epoch + 1) % 10 == 0:
-            checkpoints_dir = "checkpoints"
-            if not os.path.exists(checkpoints_dir):
-                os.makedirs(checkpoints_dir)
-            save_path = os.path.join(checkpoints_dir, f"pose_transformer_mae_epoch_{epoch+1}.pth")
+            checkpoints_dir = os.path.join("checkpoints", experiment_name)
+            os.makedirs(checkpoints_dir, exist_ok=True)
+            save_path = os.path.join(checkpoints_dir, f"{experiment_name}_epoch_{epoch+1}.pth")
             torch.save(model.state_dict(), save_path)
             print(f"Model saved to {save_path}")
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Train the Pose Transformer model.")
+    
+    # 添加命令行参数以覆盖config.toml中的设置
+    parser.add_argument('--experiment', type=str, help="Name of the experiment, used for saving checkpoints.")
+    parser.add_argument('--device', type=str, help="Device to train on ('cuda' or 'cpu')")
+    parser.add_argument('--batch_size', type=int, help="Training batch size")
+    parser.add_argument('--learning_rate', type=float, help="Optimizer learning rate")
+    parser.add_argument('--num_epochs', type=int, help="Number of training epochs")
+    parser.add_argument('--n_kps', type=int, help="Number of keypoints in the pose")
+    
+    # 添加用于覆盖损失权重的参数
+    parser.add_argument('--lambda_recon', type=float, help="Weight for reconstruction loss")
+    parser.add_argument('--lambda_vel', type=float, help="Weight for velocity consistency loss")
+    parser.add_argument('--lambda_accel', type=float, help="Weight for acceleration consistency loss")
+    parser.add_argument('--lambda_tv', type=float, help="Weight for total variation loss")
+
+    args = parser.parse_args()
+
+    # --- 使用命令行参数覆盖配置 ---
+    # 只有当用户提供了命令行参数时，才覆盖config中的值
+    if args.experiment:
+        config['training']['experiment'] = args.experiment
+    else:
+        # 如果config.toml和命令行都没有提供，则设置一个默认值
+        if 'experiment' not in config['training']:
+            config['training']['experiment'] = 'default_run'
+            
+    if args.device:
+        config['training']['device'] = args.device
+    if args.batch_size:
+        config['training']['batch_size'] = args.batch_size
+    if args.learning_rate:
+        config['training']['learning_rate'] = args.learning_rate
+    if args.num_epochs:
+        config['training']['num_epochs'] = args.num_epochs
+    if args.n_kps:
+        config['data']['n_kps'] = args.n_kps
+        
+    if args.lambda_recon is not None:
+        config['loss_weights']['lambda_recon'] = args.lambda_recon
+    if args.lambda_vel is not None:
+        config['loss_weights']['lambda_vel'] = args.lambda_vel
+    if args.lambda_accel is not None:
+        config['loss_weights']['lambda_accel'] = args.lambda_accel
+    if args.lambda_tv is not None:
+        config['loss_weights']['lambda_tv'] = args.lambda_tv
+
+    # 确保设备设置在torch中生效
+    if config['training']['device'] == 'auto':
+        config['training']['device'] = 'cuda' if torch.cuda.is_available() else 'cpu'
+
     train()
