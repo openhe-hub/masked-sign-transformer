@@ -1,13 +1,13 @@
+import cv2
+import numpy as np
 import torch
 import os
-import numpy as np
-import argparse
 
 from config_loader import config
-from model import PoseTransformer
+from models.model import PoseTransformer as PoseTransformerV1
+from models.model_v2 import PoseTransformerV2
 from dataset import PoseDataset
 from utils.render import draw_pose
-import cv2
 
 def render_animation(sequences, subset, titles, output_path, masks=None, H=1080, W=1080, fps=2):
     """
@@ -73,9 +73,16 @@ def inference(checkpoint_path, output_path="reconstructed_sequence.mp4", index_r
     n_kps = config['data']['n_kps']
     features_per_kp = 2 # config['data']['features_per_kp']
     seq_len = config['data']['sequence_length']
+    model_version = config['model'].get('version', 'v1')
 
     # Load model
-    model = PoseTransformer().to(device)
+    if model_version == 'v2':
+        print("Instantiating Model Version: v2 (Per-Keypoint Tokenization)")
+        model = PoseTransformerV2().to(device)
+    else:
+        print("Instantiating Model Version: v1 (Frame-level Tokenization)")
+        model = PoseTransformerV1().to(device)
+
     model.load_state_dict(torch.load(checkpoint_path, map_location=device))
     model.eval()
     print(f"Model loaded from {checkpoint_path}")

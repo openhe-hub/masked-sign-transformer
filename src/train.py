@@ -7,7 +7,8 @@ import argparse
 
 from config_loader import config
 from dataset import PoseDataset
-from model import PoseTransformer
+from models.model import PoseTransformer as PoseTransformerV1
+from models.model_v2 import PoseTransformerV2
 # 导入我们新的损失函数
 from losses.losses import (
     reconstruction_loss,
@@ -26,6 +27,7 @@ def train():
     num_epochs = config['training']['num_epochs']
     n_kps = config['data']['n_kps']
     experiment_name = config['training']['experiment'] # 获取实验名称
+    model_version = config['model'].get('version', 'v1')
     
     # 获取损失权重
     loss_weights = config['loss_weights']
@@ -33,7 +35,15 @@ def train():
     # --- 数据和模型准备 (不变) ---
     dataset = PoseDataset()
     train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-    model = PoseTransformer().to(device)
+    
+    # --- Dynamic Model Instantiation ---
+    if model_version == 'v2':
+        print("Instantiating Model Version: v2 (Per-Keypoint Tokenization)")
+        model = PoseTransformerV2().to(device)
+    else:
+        print("Instantiating Model Version: v1 (Frame-level Tokenization)")
+        model = PoseTransformerV1().to(device)
+
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Total trainable parameters: {num_params / 1e6:.2f}M")
     

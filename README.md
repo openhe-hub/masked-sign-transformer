@@ -1,5 +1,4 @@
 ## Introduction
-
 ## ChangeLog
 ### V0: Based on MAE + Transformer
 * 2d kps feature (x, y)
@@ -15,5 +14,13 @@
   2. full_sequence_reconstruction_loss
   3. velocity_consistency_loss
   4. acceleration_consistency_loss
-  5. bone_length_consistency_loss
-  6. total_variation_loss 
+  5. total_variation_loss 
+### V3
+* add body bone subset info
+* bone render while inference
+* add body_bone_length_loss
+### V4: add tokenizer
+* keypoint tokenizer, instead of flattern one
+* spatial-temporal embedding, instead of position embedding
+### V5: add asymmetric encoder-decoder
+### V6: scale up transformer size

@@ -7,6 +7,7 @@ n_kps = 128                   # 每帧的关键点数量
 features_per_kp = 3           # 每个关键点的特征数 (x, y) # confidence
 
 [model]
+version = "v2"                # Model version to use ("v1" or "v2")
 # d_model 必须能被 n_head 整除
 d_model = 512                 # Transformer的内部维度
 n_head = 8                    # 多头注意力的头数
