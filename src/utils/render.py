@@ -3,61 +3,53 @@ import numpy as np
 import cv2
 
 eps = 0.01
+stickwidth = 4
 
-# 因为不再使用置信度进行颜色混合，这个函数现在只是一个占位符，可以删除，但为了清晰保留了原函数名对应的逻辑部分
-# 旧的 alpha_blend_color 函数已经被移除
-
-def draw_bodypose(canvas, candidate, color, mask=None):
+def draw_bodypose(canvas, candidate, subset, color, mask=None):
     """
-    使用指定的单一颜色绘制身体关键点（不画连接线）。
-    完全不依赖 subset 数据。
+    Draws body keypoints and skeletal connections using subset data.
     """
     H, W, C = canvas.shape
     candidate = np.array(candidate)
+    subset = np.array(subset)
     
     red = (0, 0, 255)
     blue = (255, 0, 0)
+    bone_color = (0, 255, 0)
 
-    # 只需遍历 candidate 中的所有点。
+    limbSeq = [[2, 3], [2, 6], [3, 4], [4, 5], [6, 7], [7, 8], [2, 9], [9, 10], \
+               [10, 11], [2, 12], [12, 13], [13, 14], [2, 1], [1, 15], [15, 17], \
+               [1, 16], [16, 18], [3, 17], [6, 18]]
 
-    # 遍历 candidate 中的所有关节点
-    # 注意：这里的 i 只是 candidate 中的索引，不再对应 limbSeq 或关键点类型
+    # Draw connections
+    for i in range(17):
+        for n in range(len(subset)):
+            index = subset[n][np.array(limbSeq[i]) - 1]
+            Y , X = candidate[index.astype(int), 0], candidate[index.astype(int), 1]
+            if (X[0] == -1 and Y[0] == -1) or (X[1] == -1 and Y[1] == -1): 
+                continue
+            Y = candidate[index.astype(int), 0] * float(W)
+            X = candidate[index.astype(int), 1] * float(H)
+            mX = np.mean(X)
+            mY = np.mean(Y)
+            length = ((X[0] - X[1]) ** 2 + (Y[0] - Y[1]) ** 2) ** 0.5
+            angle = math.degrees(math.atan2(X[0] - X[1], Y[0] - Y[1]))
+            polygon = cv2.ellipse2Poly((int(mY), int(mX)), (int(length / 2), stickwidth), int(angle), 0, 360, 1)
+            cv2.fillConvexPoly(canvas, polygon, bone_color)
+
+    # Draw keypoints
+    # Iterate through the 18 body part indices in the subset
     for i in range(len(candidate)):
         x, y = candidate[i][0:2]
-        # 注意：这里的 score[0][i] 假设 score 是一个包含至少一个人的列表，
-        # 且 candidate[i] 对应 score[0][i]。
-        # 如果你的 score 只是一个平坦的列表，你需要调整为 score[i]
-        
-        # 鉴于原始代码中 bodies['score'] 是 (N_people, 18) 的结构，
-        # 且你只有一个人，我们假定 score[0] 是这个人的18个点的置信度。
-        # 如果你确定 candidate 的长度不大于 18，并且你想对齐置信度：
-        
-        # --------------------------------------------------------------------------------
-        # *** 关键假设：只有一个人，且 candidate 和 score[0] 是对应的 ***
-        # --------------------------------------------------------------------------------
-        
-        # 如果你确定 body 的关节点只有18个，并且 candidate 包含了这18个点：
-        if i >= 18: continue # 限制只处理前18个关节点（OpenPose/DWPose标准）
-
-        # 检查点是否有效 (原代码中是检查 index != -1，这里我们检查坐标有效性)
+        if i >= 18: continue
         if x < eps or y < eps:
             continue
-            
-        x = int(x * W)
-        y = int(y * H)
-        
+        x, y = int(x * W), int(y * H) 
         point_color = color
         if mask is not None:
+            # The mask corresponds to the 18 body parts
             point_color = red if mask[i] else blue
-        
-        # 假设我们只画出点，不依赖置信度进行颜色变化
-        cv2.circle(canvas, (int(x), int(y)), 4, point_color, thickness=-1)
-
-    # ----------------------------------------------------------------------
-    # 提示：由于你移除了subset，我们无法像以前那样准确地知道 candidate 列表中
-    # 的哪些点是有效的。上面的代码简单地假设 candidate 列表中的点都是你想要画的
-    # 身体关键点（前18个）。
-    # ----------------------------------------------------------------------
+        cv2.circle(canvas, (x, y), 4, point_color, thickness=-1)
     
     return canvas
 
@@ -106,7 +98,8 @@ def draw_facepose(canvas, all_lmks, color, mask=None):
                 cv2.circle(canvas, (x, y), 3, point_color, thickness=-1)
     return canvas
 
-def draw_pose(pose, H, W, ref_w=2160, color=(255, 0, 0), mask=None):
+def draw_pose(pose, subset, H, W, ref_w=2160, color=(255, 0, 0), mask=None):
+    # `pose` is the full keypoints array, `subset` contains the indices for one person
     bodies = pose[:18]
     faces = pose[18:86].reshape(1, 68, 2)
     hands = pose[86:].reshape(2, 21, 2)
@@ -123,8 +116,9 @@ def draw_pose(pose, H, W, ref_w=2160, color=(255, 0, 0), mask=None):
     sr = (ref_w / sz) if sz != ref_w else 1
     canvas = np.ones(shape=(int(H*sr), int(W*sr), 3), dtype=np.uint8) * 255
 
-    # draw_bodypose 现在只画点，不画线，且不依赖 subset
-    canvas = draw_bodypose(canvas, bodies, color=color, mask=body_mask)
+    # Pass the full pose array as candidate, and the first person's subset
+    # Assuming subset has shape (num_people, 20), we take the first person.
+    canvas = draw_bodypose(canvas, pose, subset, color=color, mask=body_mask)
 
     canvas = draw_handpose(canvas, hands, color=color, mask=hand_mask)
     canvas = draw_facepose(canvas, faces, color=color, mask=face_mask)

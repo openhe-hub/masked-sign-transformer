@@ -9,7 +9,7 @@ from dataset import PoseDataset
 from utils.render import draw_pose
 import cv2
 
-def render_animation(sequences, titles, output_path, masks=None, H=1080, W=1080, fps=2):
+def render_animation(sequences, subset, titles, output_path, masks=None, H=1080, W=1080, fps=2):
     """
     Renders a side-by-side animation of multiple pose sequences.
     
@@ -41,8 +41,10 @@ def render_animation(sequences, titles, output_path, masks=None, H=1080, W=1080,
             frame_mask = None
             if masks and masks[i] is not None:
                 frame_mask = masks[i][t]
+            # if i == 1 and t == 0:
+            #     import ipdb; ipdb.set_trace()
             # The draw_pose function returns a (C, H, W) numpy array, so we need to transpose it
-            pose_img = draw_pose(seq[t], H, W, mask=frame_mask) # seq[t] is (n_kps, features)
+            pose_img = draw_pose(seq[t], subset[t], H, W, mask=frame_mask) # seq[t] is (n_kps, features)
             pose_img = pose_img.transpose(1, 2, 0) # Convert to (H, W, C) for OpenCV
             pose_img = cv2.cvtColor(pose_img, cv2.COLOR_RGB2BGR) # Convert RGB to BGR for OpenCV
 
@@ -82,7 +84,7 @@ def inference(checkpoint_path, output_path="reconstructed_sequence.mp4", index_r
     dataset = PoseDataset()
 
     for data_index in range(index_range[0], index_range[1]):
-        masked_sequence, mask, original_sequence = dataset[data_index]
+        masked_sequence, mask, original_sequence, subset = dataset[data_index]
 
         # Add batch dimension and move to device
         masked_sequence = masked_sequence.unsqueeze(0).to(device)
@@ -123,17 +125,18 @@ def inference(checkpoint_path, output_path="reconstructed_sequence.mp4", index_r
         print("Rendering animation...")
         render_animation(
             sequences=[original_sequence_np, masked_sequence_np, reconstructed_sequence_np],
-            output_path=f"output/result_{data_index}.mp4",
+            subset=subset,
+            output_path=f"output/video/result_{data_index}.mp4",
             titles=['Original', 'Masked Input', 'Reconstructed'],
             masks=[None, None, mask_np]
         )
         
-        print(f"Reconstructed sequence saved to output/result_{data_index}.mp4")
+        print(f"Reconstructed sequence saved to output/video/result_{data_index}.mp4")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Inference script for PoseTransformer")
     parser.add_argument('--checkpoint', type=str, required=True, 
-                        help='Path to the model checkpoint (e.g., checkpoints/pose_transformer_mae_epoch_100.pth)')
+                        help='Path to the model checkpoint (e.g., checkpoints/v2/pose_transformer_mae_epoch_100.pth)')
     parser.add_argument('--output', type=str, default='output/reconstruction.mp4', 
                         help='Path to save the output video')
     parser.add_argument('--index_begin', type=int, default=0, 

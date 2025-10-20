@@ -14,7 +14,10 @@ def handle_one_frame(data):
     hand_kps = np.hstack([data['hands'].reshape(42, 2), data['hands_score'].reshape(42, 1)])
 
     all_kps = np.vstack([body_kps, face_kps, hand_kps])
-    return all_kps
+    return {
+        'keypoints': all_kps,
+        'subset': data['bodies']['subset']
+    }
 
 def handle_one_pkl(pkl):
     length = len(pkl)

@@ -84,7 +84,7 @@ def inference(checkpoint_path, output_path="reconstructed_sequence.mp4", data_in
         print(f"Error: data_index {data_index} is out of bounds for the dataset of size {len(dataset)}.")
         return
         
-    masked_sequence, mask, original_sequence = dataset[data_index]
+    masked_sequence, mask, original_sequence, subset = dataset[data_index]
 
     # Add batch dimension and move to device
     masked_sequence = masked_sequence.unsqueeze(0).to(device)

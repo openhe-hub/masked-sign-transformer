@@ -58,7 +58,7 @@ def train():
         }
         
         # 假设你的Dataset现在返回 (masked_seq, input_mask, original_seq, loss_mask)
-        for masked_sequence, input_mask, original_sequence in tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}"):
+        for masked_sequence, input_mask, original_sequence, subset in tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}"):
             masked_sequence = masked_sequence.to(device)
             input_mask = input_mask.to(device)
             original_sequence = original_sequence.to(device)

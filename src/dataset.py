@@ -24,23 +24,28 @@ class PoseDataset(Dataset):
     def _prepare_samples(self):
         """
         准备样本，每个样本都是一个完整的序列，而不是 (输入, 目标) 对。
+        现在样本包含关键点和'subset'信息。
         """
         print("Preparing samples for masked autoencoding...")
         for file_name in self.pkl_files:
             file_path = os.path.join(self.data_path, file_name)
             with open(file_path, 'rb') as f:
-                keypoints_data = pickle.load(f)
+                # data is a list of dicts, each with 'keypoints' and 'subset'
+                data = pickle.load(f)
             
-            # import ipdb; ipdb.set_trace()
-            
-            num_frames = len(keypoints_data)
+            num_frames = len(data)
             
             # 每次取一个完整的 sequence_length 作为样本
             for i in range(num_frames - self.sequence_length + 1):
-                sequence_list = keypoints_data[i : i + self.sequence_length]
-                sequence_np = np.array(sequence_list)
-                if self.filter_low_hand_conf(sequence_np):
-                    self.samples.append(sequence_np)
+                sequence_dicts = data[i : i + self.sequence_length]
+                
+                # 从字典列表中提取关键点和子集信息
+                keypoints_sequence = np.array([item['keypoints'] for item in sequence_dicts])
+                subset_sequence = np.array([item['subset'] for item in sequence_dicts])
+
+                if self.filter_low_hand_conf(keypoints_sequence):
+                    # 将关键点和子集信息作为一个元组存储
+                    self.samples.append((keypoints_sequence, subset_sequence))
         print(f"Total samples created: {len(self.samples)}")
     
     def filter_low_hand_conf(self, seq_data) -> bool:
@@ -62,9 +67,8 @@ class PoseDataset(Dataset):
             - final_mask_tensor (Tensor): 一个布尔张量，标记了哪些部分被掩盖 (True=掩盖)。
             - original_xy_tensor (Tensor): 原始的、未修改的 (x,y) 序列，作为重建目标。
         """ 
-        # original_sequence 现在的形状是 (seq_len, n_kps, 3)
-        original_sequence = self.samples[idx]
-        # import ipdb; ipdb.set_trace()
+        # self.samples 现在包含 (keypoints_sequence, subset_sequence) 的元组
+        original_sequence, subset_info = self.samples[idx]
         
         # 1. 分离坐标 (x,y) 和置信度 (c)
         original_xy = original_sequence[:, :, :2]
@@ -119,4 +123,4 @@ class PoseDataset(Dataset):
         # 最终的掩码，形状: (seq_len, n_kps)，模型和训练循环都需要它
         final_mask_tensor = torch.tensor(final_mask, dtype=torch.bool)
 
-        return masked_xy_tensor, final_mask_tensor, original_xy_tensor
+        return masked_xy_tensor, final_mask_tensor, original_xy_tensor, subset_info
