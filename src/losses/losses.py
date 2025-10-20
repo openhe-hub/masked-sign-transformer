@@ -60,27 +60,80 @@ def acceleration_consistency_loss(predictions, targets, n_kps):
     return F.mse_loss(pred_accel, target_accel)
 
 
-def bone_length_consistency_loss(predictions, targets, skeleton_bones, n_kps):
-    """计算骨骼长度一致性损失"""
-    if not skeleton_bones:
-        return torch.tensor(0.0, device=predictions.device)
+def body_bone_length_loss(predictions, targets, subset, n_kps):
+    """
+    计算身体骨骼长度的重建损失 (MSE)。
+    这个损失函数利用 'subset' 信息来处理缺失的关键点，
+    只在预测和目标中都存在的骨骼上计算损失。
+    """
+    # limbSeq from render.py, converted to 0-based indices for the 18 body keypoints
+    body_limb_seq = [
+        [1, 2], [1, 5], [2, 3], [3, 4], [5, 6], [6, 7], [1, 8], [8, 9],
+        [9, 10], [1, 11], [11, 12], [12, 13], [1, 0], [0, 14], [14, 16],
+        [0, 15], [15, 17], [2, 16], [5, 17]
+    ]
 
+    # Reshape inputs to be structured: (B, T, K, F)
     pred_struct = _reshape_to_structured(predictions, n_kps)
     target_struct = _reshape_to_structured(targets, n_kps)
     
-    loss = 0
-    for joint1_idx, joint2_idx in skeleton_bones:
-        # 预测的骨骼长度
-        pred_bone_vec = pred_struct[:, :, joint1_idx] - pred_struct[:, :, joint2_idx]
-        pred_bone_len = torch.norm(pred_bone_vec, dim=-1)
+    B, T, K, n_features = pred_struct.shape
+    
+    # Ensure subset is long type for indexing
+    subset_long = subset.long()
+
+    # For simplicity, we assume only one person per frame.
+    if subset_long.shape[2] > 1:
+        subset_long = subset_long[:, :, 0, :]
+    else:
+        subset_long = subset_long.squeeze(2) # -> (B, T, 20)
+
+    all_pred_lens = []
+    all_target_lens = []
+
+    for p1_part_idx, p2_part_idx in body_limb_seq:
+        # Get the actual keypoint indices from subset
+        kp_indices_p1 = subset_long[..., p1_part_idx]  # Shape: (B, T)
+        kp_indices_p2 = subset_long[..., p2_part_idx]  # Shape: (B, T)
+
+        # Create a mask for valid bones where both keypoints are present (index != -1)
+        valid_mask = (kp_indices_p1 != -1) & (kp_indices_p2 != -1) # Shape: (B, T)
         
-        # 真实的骨骼长度
-        target_bone_vec = target_struct[:, :, joint1_idx] - target_struct[:, :, joint2_idx]
-        target_bone_len = torch.norm(target_bone_vec, dim=-1)
+        if not torch.any(valid_mask):
+            continue
+
+        valid_mask_flat = valid_mask.view(-1)
         
-        loss += F.mse_loss(pred_bone_len, target_bone_len)
-        
-    return loss / len(skeleton_bones)
+        kp_indices_p1_safe = torch.clamp(kp_indices_p1, min=0).view(-1)
+        kp_indices_p2_safe = torch.clamp(kp_indices_p2, min=0).view(-1)
+
+        # --- Gather coordinates for predicted poses ---
+        pred_flat = pred_struct.reshape(B * T, K, n_features)
+        idx1_gather = kp_indices_p1_safe.unsqueeze(1).unsqueeze(2).expand(-1, 1, n_features)
+        coords1_pred = torch.gather(pred_flat, 1, idx1_gather).squeeze(1)
+        idx2_gather = kp_indices_p2_safe.unsqueeze(1).unsqueeze(2).expand(-1, 1, n_features)
+        coords2_pred = torch.gather(pred_flat, 1, idx2_gather).squeeze(1)
+
+        # --- Gather coordinates for target poses ---
+        target_flat = target_struct.reshape(B * T, K, n_features)
+        coords1_target = torch.gather(target_flat, 1, idx1_gather).squeeze(1)
+        coords2_target = torch.gather(target_flat, 1, idx2_gather).squeeze(1)
+
+        # --- Calculate bone lengths ---
+        pred_bone_len = torch.norm(coords1_pred - coords2_pred, dim=-1)
+        target_bone_len = torch.norm(coords1_target - coords2_target, dim=-1)
+
+        all_pred_lens.append(pred_bone_len[valid_mask_flat])
+        all_target_lens.append(target_bone_len[valid_mask_flat])
+
+    if not all_pred_lens:
+        return torch.tensor(0.0, device=predictions.device, requires_grad=True)
+
+    pred_lens_tensor = torch.cat(all_pred_lens)
+    target_lens_tensor = torch.cat(all_target_lens)
+
+    return F.mse_loss(pred_lens_tensor, target_lens_tensor)
+
 
 
 def total_variation_loss(predictions, n_kps):

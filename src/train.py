@@ -14,7 +14,7 @@ from losses.losses import (
     full_sequence_reconstruction_loss,
     velocity_consistency_loss,
     acceleration_consistency_loss,
-    bone_length_consistency_loss,
+    body_bone_length_loss,
     total_variation_loss
 )
 
@@ -29,11 +29,6 @@ def train():
     
     # 获取损失权重
     loss_weights = config['loss_weights']
-    
-    # 获取骨骼定义
-    skeleton_bones = config['skeleton']['bones']
-
-    model_features_per_kp = 2
     
     # --- 数据和模型准备 (不变) ---
     dataset = PoseDataset()
@@ -62,6 +57,7 @@ def train():
             masked_sequence = masked_sequence.to(device)
             input_mask = input_mask.to(device)
             original_sequence = original_sequence.to(device)
+            subset = subset.to(device)
 
             optimizer.zero_grad()
             
@@ -80,7 +76,7 @@ def train():
             loss_accel = acceleration_consistency_loss(predictions, original_sequence, n_kps)
             
             # 4. 骨骼长度一致性损失
-            # loss_bone = bone_length_consistency_loss(predictions, original_sequence, skeleton_bones, n_kps)
+            loss_bone = body_bone_length_loss(predictions, original_sequence, subset, n_kps)
             
             # 5. 总变差正则化 (只作用于预测)
             loss_tv = total_variation_loss(predictions, n_kps)
@@ -89,7 +85,7 @@ def train():
             total_loss = (loss_weights['lambda_recon'] * loss_recon +
                           loss_weights['lambda_vel'] * loss_vel +
                           loss_weights['lambda_accel'] * loss_accel +
-                        #   loss_weights['lambda_bone'] * loss_bone +
+                          loss_weights['lambda_bone'] * loss_bone +
                           loss_weights['lambda_tv'] * loss_tv)
             
             total_loss.backward()
@@ -100,7 +96,7 @@ def train():
             epoch_losses['recon'] += loss_recon.item()
             epoch_losses['vel'] += loss_vel.item()
             epoch_losses['accel'] += loss_accel.item()
-            # epoch_losses['bone'] += loss_bone.item()
+            epoch_losses['bone'] += loss_bone.item()
             epoch_losses['tv'] += loss_tv.item()
 
         # 打印每个epoch的平均损失
@@ -132,6 +128,7 @@ if __name__ == "__main__":
     parser.add_argument('--lambda_recon', type=float, help="Weight for reconstruction loss")
     parser.add_argument('--lambda_vel', type=float, help="Weight for velocity consistency loss")
     parser.add_argument('--lambda_accel', type=float, help="Weight for acceleration consistency loss")
+    parser.add_argument('--lambda_bone', type=float, help="Weight for body bone length consistency loss")
     parser.add_argument('--lambda_tv', type=float, help="Weight for total variation loss")
 
     args = parser.parse_args()
@@ -162,6 +159,8 @@ if __name__ == "__main__":
         config['loss_weights']['lambda_vel'] = args.lambda_vel
     if args.lambda_accel is not None:
         config['loss_weights']['lambda_accel'] = args.lambda_accel
+    if args.lambda_bone is not None:
+        config['loss_weights']['lambda_bone'] = args.lambda_bone
     if args.lambda_tv is not None:
         config['loss_weights']['lambda_tv'] = args.lambda_tv
 
