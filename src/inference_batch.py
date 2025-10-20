@@ -1,12 +1,15 @@
 import cv2
-import numpy as np
 import torch
-import os
+from torch.utils.data import DataLoader
+import numpy as np
+import argparse
 
 from config_loader import config
 from models.model import PoseTransformer as PoseTransformerV1
 from models.model_v2 import PoseTransformerV2
-from dataset import PoseDataset
+from models.model_v3 import PoseTransformerV3
+from datasets.dataset import PoseDataset as PoseDatasetV1
+from datasets.dataset import PoseDatasetV3
 from utils.render import draw_pose
 
 def render_animation(sequences, subset, titles, output_path, masks=None, H=1080, W=1080, fps=2):
@@ -76,19 +79,22 @@ def inference(checkpoint_path, output_path="reconstructed_sequence.mp4", index_r
     model_version = config['model'].get('version', 'v1')
 
     # Load model
-    if model_version == 'v2':
+    if model_version == 'v5':
+        print("Instantiating Model Version: v3 (Asymmetric Encoder-Decoder)")
+        model = PoseTransformerV3().to(device)
+        dataset = PoseDatasetV3()
+    elif model_version == 'v4':
         print("Instantiating Model Version: v2 (Per-Keypoint Tokenization)")
         model = PoseTransformerV2().to(device)
+        dataset = PoseDatasetV1()
     else:
         print("Instantiating Model Version: v1 (Frame-level Tokenization)")
         model = PoseTransformerV1().to(device)
+        dataset = PoseDatasetV1()
 
     model.load_state_dict(torch.load(checkpoint_path, map_location=device))
     model.eval()
     print(f"Model loaded from {checkpoint_path}")
-
-    # Get a sample from the dataset
-    dataset = PoseDataset()
 
     for data_index in range(index_range[0], index_range[1]):
         masked_sequence, mask, original_sequence, subset = dataset[data_index]

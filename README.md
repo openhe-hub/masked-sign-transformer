@@ -19,8 +19,15 @@
 * add body bone subset info
 * bone render while inference
 * add body_bone_length_loss
-### V4: add tokenizer
+### V4: add tokenizer (Vanilla STTF-like)
 * keypoint tokenizer, instead of flattern one
 * spatial-temporal embedding, instead of position embedding
-### V5: add asymmetric encoder-decoder
+### V5: add asymmetric encoder-decoder (large-small)
+* MAE-like asymmetric encoder-decoder
+* a fixed total ratio of spatial-temporal mask
 ### V6: scale up transformer size
+
+## Future Plan
+### Bert-based: double direction context input
+### TAE-based: stream chatsign generation
+### Video Part: SVD / GAN ?

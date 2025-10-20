@@ -10,7 +10,9 @@ from tqdm import tqdm
 from config_loader import config
 from models.model import PoseTransformer as PoseTransformerV1
 from models.model_v2 import PoseTransformerV2
-from dataset import PoseDataset
+from models.model_v3 import PoseTransformerV3
+from datasets.dataset import PoseDataset as PoseDatasetV1
+from datasets.dataset_v3 import PoseDatasetV3
 from losses.losses import body_bone_length_loss, velocity_consistency_loss
 
 def evaluate(checkpoint_path, output_name=None):
@@ -29,19 +31,24 @@ def evaluate(checkpoint_path, output_name=None):
     model_version = config['model'].get('version', 'v1')
 
     # --- Model and Data Loading ---
-    if model_version == 'v2':
+    if model_version == 'v5':
+        print("Instantiating Model Version: v3 (Asymmetric Encoder-Decoder)")
+        model = PoseTransformerV3().to(device)
+        dataset = PoseDatasetV3()
+    elif model_version == 'v4':
         print("Instantiating Model Version: v2 (Per-Keypoint Tokenization)")
         model = PoseTransformerV2().to(device)
+        dataset = PoseDatasetV1()
     else:
         print("Instantiating Model Version: v1 (Frame-level Tokenization)")
         model = PoseTransformerV1().to(device)
+        dataset = PoseDatasetV1()
+    
+    eval_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
         
     model.load_state_dict(torch.load(checkpoint_path, map_location=device))
     model.eval()
     print(f"Model loaded from {checkpoint_path}")
-
-    dataset = PoseDataset()
-    eval_loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
     # --- Metrics Accumulators ---
     total_mse = 0
