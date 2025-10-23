@@ -3,8 +3,8 @@ import os
 import numpy as np
 
 # params
-input_folder = 'data/pkl_files'
-output_folder = 'data/chatsign_200_conf'
+input_folder = 'data/pkl_wo_retarget'
+output_folder = 'data/chatsign_200_wo_retarget'
 
 def handle_one_frame(data):
     if data['hands'].shape[0] > 2 or data['hands_score'].shape[0] > 2: return None

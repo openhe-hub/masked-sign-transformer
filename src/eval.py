@@ -62,7 +62,7 @@ def evaluate(checkpoint_path, output_name=None):
 
     print("Starting evaluation...")
     with torch.no_grad():
-        for masked_sequence, mask, original_sequence, subset in tqdm(eval_loader, desc="Evaluating"):
+        for masked_sequence, mask, original_sequence, subset, _ in tqdm(eval_loader, desc="Evaluating"):
             masked_sequence = masked_sequence.to(device)
             mask = mask.to(device)
             original_sequence = original_sequence.to(device)
@@ -122,7 +122,7 @@ def evaluate(checkpoint_path, output_name=None):
         "checkpoint_path": checkpoint_path,
         "overall_metrics": {
             "masked_mse": avg_mse,
-            "masked_mae": avg_mae,
+            "masked_l1": avg_mae,
             "body_bone_length_mae": avg_bone_error,
             "velocity_mse": avg_velocity_error
         },

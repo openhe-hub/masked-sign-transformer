@@ -9,10 +9,10 @@ from models.model import PoseTransformer as PoseTransformerV1
 from models.model_v2 import PoseTransformerV2
 from models.model_v3 import PoseTransformerV3
 from datasets.dataset import PoseDataset as PoseDatasetV1
-from datasets.dataset import PoseDatasetV3
-from utils.render import draw_pose
+from datasets.dataset_v3 import PoseDatasetV3
+from utils.render_conf import draw_pose
 
-def render_animation(sequences, subset, titles, output_path, masks=None, H=1080, W=1080, fps=2):
+def render_animation(sequences, subset, output_path, H=1080, W=1080, fps=30):
     """
     Renders a side-by-side animation of multiple pose sequences.
     
@@ -42,18 +42,14 @@ def render_animation(sequences, subset, titles, output_path, masks=None, H=1080,
         frames = []
         for i, seq in enumerate(sequences):
             frame_mask = None
-            if masks and masks[i] is not None:
-                frame_mask = masks[i][t]
             # if i == 1 and t == 0:
             #     import ipdb; ipdb.set_trace()
             # The draw_pose function returns a (C, H, W) numpy array, so we need to transpose it
-            pose_img = draw_pose(seq[t], subset[t], H, W, mask=frame_mask) # seq[t] is (n_kps, features)
+            pose_img = draw_pose(seq[t], subset[t], H, W) # seq[t] is (n_kps, features)
             pose_img = pose_img.transpose(1, 2, 0) # Convert to (H, W, C) for OpenCV
             pose_img = cv2.cvtColor(pose_img, cv2.COLOR_RGB2BGR) # Convert RGB to BGR for OpenCV
 
             # Add title to the frame
-            cv2.putText(pose_img, titles[i], (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 
-                        1.5, (0, 0, 0), 2, cv2.LINE_AA)
             frames.append(pose_img)
         
         # Concatenate frames horizontally
@@ -137,11 +133,9 @@ def inference(checkpoint_path, output_path="reconstructed_sequence.mp4", index_r
 
         print("Rendering animation...")
         render_animation(
-            sequences=[original_sequence_np, masked_sequence_np, reconstructed_sequence_np],
+            sequences=[reconstructed_sequence_np],
             subset=subset,
-            output_path=f"output/video/result_{data_index}.mp4",
-            titles=['Original', 'Masked Input', 'Reconstructed'],
-            masks=[None, None, mask_np]
+            output_path=f"output/video/mm/result_{data_index}.mp4"
         )
         
         print(f"Reconstructed sequence saved to output/video/result_{data_index}.mp4")
