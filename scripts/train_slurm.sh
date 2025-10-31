@@ -26,7 +26,7 @@
 
 # Set environment variables for better performance
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=0cp 
 
 # Print job info
 echo "Job started at: $(date)"
@@ -41,9 +41,9 @@ nvidia-smi --query-gpu=name,memory.total --format=csv
 # Run training with optional command line arguments
 # You can override config settings via command line
 python src/train.py \
-    --experiment "v5" \
+    --experiment "v3-large" \
     --device cuda \
-    --batch_size 32 \
+    --batch_size 64 \
     --learning_rate 0.0001 \
     --num_epochs 100
 

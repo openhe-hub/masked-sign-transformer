@@ -28,6 +28,7 @@ def draw_bodypose(canvas, candidate, subset):
 
     for i in range(17):
         for n in range(len(subset)):
+            # import ipdb; ipdb.set_trace()
             index = subset[n][np.array(limbSeq[i]) - 1]
             # conf = score[n][np.array(limbSeq[i]) - 1]
             Y = candidate[index.astype(int), 0] * float(W)

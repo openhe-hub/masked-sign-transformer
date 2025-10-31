@@ -1,38 +1,48 @@
 # Pose Transformer Project Configuration
 
 [data]
-data_dir = "./data/chatsign_200_wo_retarget"          # pkl数据目录 (路径相对于项目根目录)
+data_dir = "./data/chatsign_50k"          # pkl数据目录 (路径相对于项目根目录)
 video_dir = "./data/chatsign_200_videos"
+ref_img_path = "./assets/img/test2.jpg"
+ref_img_pose = "./assets/pose/test2.pkl"
 sequence_length = 16          # 输入序列的长度（看过去多少帧）
 n_kps = 128                   # 每帧的关键点数量
 features_per_kp = 3           # 每个关键点的特征数 (x, y) # confidence
+limit = 1000
 
 [model]
 version = "v3"                # Model version to use
 # d_model 必须能被 n_head 整-除
-d_model = 512                 # Transformer的内部维度
-n_head = 8                    # 多头注意力的头数
-num_encoder_layers = 6        # Transformer编码器层数
-dim_feedforward = 2048        # 前馈网络的维度
+d_model = 768                 # Transformer的内部维度 (提升)
+n_head = 12                   # 多头注意力的头数 (提升)
+num_encoder_layers = 8        # Transformer编码器层数 (提升)
+dim_feedforward = 3072        # 前馈网络的维度 (d_model * 4)
 dropout = 0.1                 # Dropout比例
 
 # --- Decoder settings (for V3 model) ---
-decoder_d_model = 256         # Decoder的内部维度 (可以更小)
-decoder_n_head = 4            # Decoder的多头注意力的头数
-num_decoder_layers = 2        # Decoder的层数 (可以更少)
-decoder_dim_feedforward = 1024 # Decoder的前馈网络的维度
+decoder_d_model = 384         # Decoder的内部维度 (提升)
+decoder_n_head = 6            # Decoder的多头注意力的头数 (提升)
+num_decoder_layers = 4        # Decoder的层数 (提升)
+decoder_dim_feedforward = 1536 # Decoder的前馈网络的维度 (decoder_d_model * 4)
 
 [training]
 batch_size = 32
-learning_rate = 0.0001
-num_epochs = 100
+learning_rate = 0.0005        # 初始最大学习率
+num_epochs = 500              # 增加训练轮次以适应大数据集
+weight_decay = 0.05           # AdamW的权重衰减
+gradient_accumulation_steps = 4 # 梯度累积步数, 有效batch_size = 32 * 4 = 128
 # device: "cuda", "cpu", or "auto" for automatic detection
 device = "auto"
 
+[lr_scheduler]
+# "cosine_with_warmup" or "none"
+type = "cosine_with_warmup"
+warmup_epochs = 20            # 预热轮次
+
 [masking]
 total_mask_ratio = 0.75       # (For V3 Model) 掩码总比例
-spatial_mask_ratio = 0.05     # 空间（关键点）掩码比例
-temporal_mask_ratio = 0.15    # 时间（帧）掩码比例
+spatial_mask_ratio = 0.15     # 空间（关键点）掩码比例
+temporal_mask_ratio = 0.05    # 时间（帧）掩码比例
 confidence_threshold = 0.3
 
 [loss_weights]

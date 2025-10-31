@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm
 import os
 import argparse
@@ -29,6 +30,9 @@ def train():
     batch_size = config['training']['batch_size']
     learning_rate = config['training']['learning_rate']
     num_epochs = config['training']['num_epochs']
+    weight_decay = config['training']['weight_decay']
+    grad_accum_steps = config['training']['gradient_accumulation_steps']
+    
     n_kps = config['data']['n_kps']
     experiment_name = config['training']['experiment'] # 获取实验名称
     model_version = config['model'].get('version', 'v1')
@@ -55,75 +59,81 @@ def train():
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Total trainable parameters: {num_params / 1e6:.2f}M")
     
-    # --- 损失函数和优化器 (更新) ---
-    # 使用导师建议的Huber Loss作为重建损失
-    recon_criterion = nn.HuberLoss()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    # --- 优化器和学习率调度器 ---
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    
+    scheduler = None
+    if config['lr_scheduler']['type'] == 'cosine_with_warmup':
+        warmup_epochs = config['lr_scheduler']['warmup_epochs']
+        # Scheduler will start after the warmup phase
+        scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs - warmup_epochs, eta_min=1e-6)
     
     print(f"Start training on device: {device}")
     print(f"Running experiment: {experiment_name}")
+    print(f"Effective batch size: {batch_size * grad_accum_steps}")
+
     for epoch in range(num_epochs):
         model.train()
-        # 用于记录每个loss分量的字典
+        # --- Warmup Logic ---
+        if config['lr_scheduler']['type'] == 'cosine_with_warmup' and epoch < warmup_epochs:
+            # Linearly increase learning rate during warmup
+            warmup_lr = learning_rate * (epoch + 1) / warmup_epochs
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = warmup_lr
+        
         epoch_losses = {
             'total': 0.0, 'recon': 0.0, 'vel': 0.0, 
             'accel': 0.0, 'bone': 0.0, 'tv': 0.0
         }
         
-        # 假设你的Dataset现在返回 (masked_seq, input_mask, original_seq, loss_mask)
-        for masked_sequence, input_mask, original_sequence, subset, _ in tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}"):
+        optimizer.zero_grad()
+        
+        for i, (masked_sequence, input_mask, original_sequence, subset) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")):
             masked_sequence = masked_sequence.to(device)
             input_mask = input_mask.to(device)
             original_sequence = original_sequence.to(device)
             subset = subset.to(device)
-
-            optimizer.zero_grad()
             
-            # --- 核心变化: 计算多目标损失 ---
             predictions = model(masked_sequence, input_mask)
             
-            # 1. 重建损失
-            loss_recon = full_sequence_reconstruction_loss(predictions, original_sequence, recon_criterion)
-            
-            # --- 以下损失在整个序列上计算，以保证全局平滑性和一致性 ---
-            
-            # 2. 速度一致性损失
+            loss_recon = full_sequence_reconstruction_loss(predictions, original_sequence, nn.HuberLoss())
             loss_vel = velocity_consistency_loss(predictions, original_sequence, n_kps)
-            
-            # 3. 加速度一致性损失
             loss_accel = acceleration_consistency_loss(predictions, original_sequence, n_kps)
-            
-            # 4. 骨骼长度一致性损失
             loss_bone = body_bone_length_loss(predictions, original_sequence, subset, n_kps)
-            
-            # 5. 总变差正则化 (只作用于预测)
             loss_tv = total_variation_loss(predictions, n_kps)
 
-            # --- 组合总损失 ---
             total_loss = (loss_weights['lambda_recon'] * loss_recon +
                           loss_weights['lambda_vel'] * loss_vel +
                           loss_weights['lambda_accel'] * loss_accel +
                           loss_weights['lambda_bone'] * loss_bone +
                           loss_weights['lambda_tv'] * loss_tv)
             
+            # --- Gradient Accumulation ---
+            # Normalize loss to account for accumulation steps
+            total_loss = total_loss / grad_accum_steps
             total_loss.backward()
-            optimizer.step()
             
-            # 记录各个损失的值
-            epoch_losses['total'] += total_loss.item()
+            if (i + 1) % grad_accum_steps == 0:
+                optimizer.step()
+                optimizer.zero_grad()
+            
+            # Record losses (de-normalized)
+            epoch_losses['total'] += total_loss.item() * grad_accum_steps
             epoch_losses['recon'] += loss_recon.item()
             epoch_losses['vel'] += loss_vel.item()
             epoch_losses['accel'] += loss_accel.item()
             epoch_losses['bone'] += loss_bone.item()
             epoch_losses['tv'] += loss_tv.item()
 
-        # 打印每个epoch的平均损失
+        # --- LR Scheduler Step ---
+        if scheduler is not None and epoch >= warmup_epochs:
+            scheduler.step()
+
         num_batches = len(train_loader)
-        print(f"Epoch {epoch+1} completed. Losses:")
+        print(f"Epoch {epoch+1} completed. Current LR: {optimizer.param_groups[0]['lr']:.6f}")
         for loss_name, loss_val in epoch_losses.items():
             print(f"  - Avg {loss_name}: {loss_val / num_batches:.6f}")
 
-        # --- 保存模型 (更新) ---
         if (epoch + 1) % 10 == 0:
             checkpoints_dir = os.path.join("checkpoints", experiment_name)
             os.makedirs(checkpoints_dir, exist_ok=True)
@@ -134,7 +144,6 @@ def train():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train the Pose Transformer model.")
     
-    # 添加命令行参数以覆盖config.toml中的设置
     parser.add_argument('--experiment', type=str, help="Name of the experiment, used for saving checkpoints.")
     parser.add_argument('--device', type=str, help="Device to train on ('cuda' or 'cpu')")
     parser.add_argument('--batch_size', type=int, help="Training batch size")
@@ -142,7 +151,6 @@ if __name__ == "__main__":
     parser.add_argument('--num_epochs', type=int, help="Number of training epochs")
     parser.add_argument('--n_kps', type=int, help="Number of keypoints in the pose")
     
-    # 添加用于覆盖损失权重的参数
     parser.add_argument('--lambda_recon', type=float, help="Weight for reconstruction loss")
     parser.add_argument('--lambda_vel', type=float, help="Weight for velocity consistency loss")
     parser.add_argument('--lambda_accel', type=float, help="Weight for acceleration consistency loss")
@@ -151,12 +159,9 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # --- 使用命令行参数覆盖配置 ---
-    # 只有当用户提供了命令行参数时，才覆盖config中的值
     if args.experiment:
         config['training']['experiment'] = args.experiment
     else:
-        # 如果config.toml和命令行都没有提供，则设置一个默认值
         if 'experiment' not in config['training']:
             config['training']['experiment'] = 'default_run'
             
@@ -182,7 +187,6 @@ if __name__ == "__main__":
     if args.lambda_tv is not None:
         config['loss_weights']['lambda_tv'] = args.lambda_tv
 
-    # 确保设备设置在torch中生效
     if config['training']['device'] == 'auto':
         config['training']['device'] = 'cuda' if torch.cuda.is_available() else 'cpu'
 

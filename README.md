@@ -25,7 +25,8 @@
 ### V5: add asymmetric encoder-decoder (large-small)
 * MAE-like asymmetric encoder-decoder
 * a fixed total ratio of spatial-temporal mask
-### V6: scale up transformer size
+### Problem: Scale-up failure
+1. add lr scheduler
 
 ## Future Plan
 ### Bert-based: double direction context input

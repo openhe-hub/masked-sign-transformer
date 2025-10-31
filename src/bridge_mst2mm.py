@@ -1,8 +1,12 @@
 import cv2
 import torch
+import pickle
 from torch.utils.data import DataLoader
+from torchvision.datasets.folder import pil_loader
+from torchvision.transforms.functional import pil_to_tensor, resize, center_crop
 import numpy as np
 import argparse
+import math
 
 from config_loader import config
 from models.model import PoseTransformer as PoseTransformerV1
@@ -10,58 +14,38 @@ from models.model_v2 import PoseTransformerV2
 from models.model_v3 import PoseTransformerV3
 from datasets.dataset import PoseDataset as PoseDatasetV1
 from datasets.dataset_v3 import PoseDatasetV3
-from utils.render import draw_pose
+from datasets.dataset_continuos import PoseDatasetContinuos
+from utils.render_conf import draw_pose
+from utils.constants import ASPECT_RATIO
 
-def render_animation(sequences, subset, titles, output_path, masks=None, H=1080, W=1080, fps=2):
-    """
-    Renders a side-by-side animation of multiple pose sequences.
-    
-    Args:
-        sequences (list of np.ndarray): List of pose sequences to render. 
-                                       Each sequence has shape (seq_len, n_kps, features).
-        titles (list of str): List of titles for each sequence.
-        output_path (str): Path to save the output video.
-        masks (list of np.ndarray or None): Optional list of masks. Each mask has shape (seq_len, n_kps).
-        H (int): Height of the canvas for each individual render.
-        W (int): Width of the canvas for each individual render.
-        fps (int): Frames per second for the output video.
-    """
-    num_sequences = len(sequences)
-    seq_len = sequences[0].shape[0]
-    
-    # Define the codec and create VideoWriter object
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    # The final video width will be the sum of individual widths
-    video_writer = cv2.VideoWriter(output_path, fourcc, fps, (W * num_sequences, H))
+def preprocess_ref(image_path, resolution=576):
+    image_pixels = pil_loader(image_path)
+    image_pixels = pil_to_tensor(image_pixels) # (c, h, w)
+    h, w = image_pixels.shape[-2:]
+    ############################ compute target h/w according to original aspect ratio ###############################
+    if h>w:
+        w_target, h_target = resolution, int(resolution / ASPECT_RATIO // 64) * 64
+    else:
+        w_target, h_target = int(resolution / ASPECT_RATIO // 64) * 64, resolution
+    h_w_ratio = float(h) / float(w)
+    if h_w_ratio < h_target / w_target:
+        h_resize, w_resize = h_target, math.ceil(h_target / h_w_ratio)
+    else:
+        h_resize, w_resize = math.ceil(w_target * h_w_ratio), w_target
+    image_pixels = resize(image_pixels, [h_resize, w_resize], antialias=None)
+    image_pixels = center_crop(image_pixels, [h_target, w_target])
+    image_pixels = image_pixels.permute((1, 2, 0)).numpy()
+    return image_pixels
 
-    if not video_writer.isOpened():
-        print("Error: Could not open video writer.")
-        return
-
-    for t in range(seq_len):
-        frames = []
-        for i, seq in enumerate(sequences):
-            frame_mask = None
-            if masks and masks[i] is not None:
-                frame_mask = masks[i][t]
-            # if i == 1 and t == 0:
-            #     import ipdb; ipdb.set_trace()
-            # The draw_pose function returns a (C, H, W) numpy array, so we need to transpose it
-            pose_img = draw_pose(seq[t], subset[t], H, W, mask=frame_mask) # seq[t] is (n_kps, features)
-            pose_img = pose_img.transpose(1, 2, 0) # Convert to (H, W, C) for OpenCV
-            pose_img = cv2.cvtColor(pose_img, cv2.COLOR_RGB2BGR) # Convert RGB to BGR for OpenCV
-
-            # Add title to the frame
-            cv2.putText(pose_img, titles[i], (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 
-                        1.5, (0, 0, 0), 2, cv2.LINE_AA)
-            frames.append(pose_img)
-        
-        # Concatenate frames horizontally
-        combined_frame = np.concatenate(frames, axis=1)
-        
-        video_writer.write(combined_frame)
-        
-    video_writer.release()
+def render_animation(seq, subset, ref_image):
+    frames = []
+    height, width, _ = ref_image.shape
+    for i, seq in enumerate(seq):
+        # The draw_pose function returns a (C, H, W) numpy array, so we need to transpose it
+        pose_img = draw_pose(seq, subset, height, width) # seq[t] is (n_kps, features)
+        # Add title to the frame
+        frames.append(pose_img)
+    return np.stack(frames)
 
 def inference(checkpoint_path, output_path="reconstructed_sequence.mp4", index_range=[0,100]):
     """
@@ -80,24 +64,28 @@ def inference(checkpoint_path, output_path="reconstructed_sequence.mp4", index_r
 
     # Load model
     if model_version == 'v5':
-        print("Instantiating Model Version: v3 (Asymmetric Encoder-Decoder)")
+        print("Instantiating Model Version: v5 (Asymmetric Encoder-Decoder)")
         model = PoseTransformerV3().to(device)
         dataset = PoseDatasetV3()
     elif model_version == 'v4':
-        print("Instantiating Model Version: v2 (Per-Keypoint Tokenization)")
+        print("Instantiating Model Version: v4 (Per-Keypoint Tokenization)")
         model = PoseTransformerV2().to(device)
         dataset = PoseDatasetV1()
     else:
-        print("Instantiating Model Version: v1 (Frame-level Tokenization)")
+        print("Instantiating Model Version: v1-3 (Frame-level Tokenization)")
         model = PoseTransformerV1().to(device)
-        dataset = PoseDatasetV1()
+        dataset = PoseDatasetContinuos()
 
     model.load_state_dict(torch.load(checkpoint_path, map_location=device))
     model.eval()
     print(f"Model loaded from {checkpoint_path}")
 
+    all_pose_pixels = []
+    all_video_info = []
+
     for data_index in range(index_range[0], index_range[1]):
-        masked_sequence, mask, original_sequence, subset = dataset[data_index]
+        if data_index >= len(dataset): break
+        masked_sequence, mask, original_sequence, subset, video_info = dataset[data_index]
 
         # Add batch dimension and move to device
         masked_sequence = masked_sequence.unsqueeze(0).to(device)
@@ -135,16 +123,35 @@ def inference(checkpoint_path, output_path="reconstructed_sequence.mp4", index_r
         # Set masked keypoints in the input to a position where they are not visible
         masked_sequence_np[mask_np] = -1
 
-        print("Rendering animation...")
-        render_animation(
-            sequences=[original_sequence_np, masked_sequence_np, reconstructed_sequence_np],
-            subset=subset,
-            output_path=f"output/video/result_{data_index}.mp4",
-            titles=['Original', 'Masked Input', 'Reconstructed'],
-            masks=[None, None, mask_np]
-        )
-        
-        print(f"Reconstructed sequence saved to output/video/result_{data_index}.mp4")
+        # bridge part
+
+        # 1. get ref img pixels
+        ref_img_path = config['data']['ref_img_path']
+        image_pixels = preprocess_ref(ref_img_path)
+        # 2. get ref img pose
+        image_pose = None
+        with open(config['data']['ref_img_pose'], 'rb') as fp:
+            image_pose = pickle.load(fp)
+        # 3. get ref video pose
+        video_poses = render_animation(reconstructed_sequence_np, subset[0], image_pixels)
+        pose_pixels = np.concatenate([np.expand_dims(image_pose, 0), video_poses])
+        # 4. trans
+        image_pixels = np.transpose(np.expand_dims(image_pixels, 0), (0, 3, 1, 2))
+        pose_pixels, image_pixels = torch.from_numpy(pose_pixels.copy()) / 127.5 - 1, torch.from_numpy(image_pixels) / 127.5 - 1
+        all_pose_pixels.append(pose_pixels)
+        all_video_info.append(video_info)
+
+    # 5. save
+    print(torch.cat(all_pose_pixels, dim=0).shape)
+    print(image_pixels.shape)
+    export_dict = {
+        'pose_pixels': torch.cat(all_pose_pixels, dim=0),
+        'image_pixels': image_pixels,
+        'video_info': all_video_info,
+    }
+    print(all_video_info)
+    with open(f'output/bridge/seg_all3.pkl', 'wb') as fp:
+        pickle.dump(export_dict, fp)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Inference script for PoseTransformer")

@@ -5,9 +5,8 @@ import os
 import pickle
 import cv2
 from config_loader import config
-from tqdm import tqdm
 
-class PoseDataset(Dataset):
+class PoseDatasetContinuos(Dataset):
     def __init__(self):
         # --- 配置参数 ---
         self.sequence_length = config['data']['sequence_length']
@@ -15,7 +14,6 @@ class PoseDataset(Dataset):
         self.features_per_kp = config['data']['features_per_kp']
         self.data_path = config['data']['data_dir']
         self.video_path = config['data']['video_dir']
-        self.limit = config['data']['limit']
         
         self.spatial_mask_ratio = config['masking']['spatial_mask_ratio']
         self.temporal_mask_ratio = config['masking']['temporal_mask_ratio']
@@ -33,15 +31,13 @@ class PoseDataset(Dataset):
         准备样本，并为每个视频动态计算其采样步长，确保数据匹配。
         """
         print("Preparing samples with dynamic stride calculation...")
-        if self.limit > 0  and self.limit <= len(self.pkl_files): 
-            self.pkl_files = self.pkl_files[:self.limit]
-        for file_name in tqdm(self.pkl_files, desc="Processing pkl files"):
-            # video_name = file_name.replace('_kps.pkl', '.mp4')
-            # video_file_path = os.path.join(self.video_path, video_name)
+        for file_name in self.pkl_files:
+            video_name = file_name.replace('_kps.pkl', '.mp4')
+            video_file_path = os.path.join(self.video_path, video_name)
 
-            # if not os.path.exists(video_file_path):
-            #     print(f"Warning: Video file not found for {file_name}, skipping.")
-            #     continue
+            if not os.path.exists(video_file_path):
+                print(f"Warning: Video file not found for {file_name}, skipping.")
+                continue
 
             # 加载 pkl 数据以获取其长度
             file_path = os.path.join(self.data_path, file_name)
@@ -50,40 +46,47 @@ class PoseDataset(Dataset):
             pkl_frame_count = len(data)
 
             # 打开视频，获取其帧数和FPS
-            # cap = cv2.VideoCapture(video_file_path)
-            # if not cap.isOpened():
-            #     print(f"Warning: Could not open video file {video_file_path}, skipping.")
-            #     continue
-            # video_frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            # video_fps = cap.get(cv2.CAP_PROP_FPS)
-            # cap.release()
+            cap = cv2.VideoCapture(video_file_path)
+            if not cap.isOpened():
+                print(f"Warning: Could not open video file {video_file_path}, skipping.")
+                continue
+            video_frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            video_fps = cap.get(cv2.CAP_PROP_FPS)
+            cap.release()
 
             # 【核心逻辑】复制 get_video_pose 中的步长计算方法
-            # if video_fps <= 0: # 防止除以零或负数
-            #     print(f"Warning: Invalid FPS ({video_fps}) for video {video_name}, skipping.")
-            #     continue
+            if video_fps <= 0: # 防止除以零或负数
+                print(f"Warning: Invalid FPS ({video_fps}) for video {video_name}, skipping.")
+                continue
             
             # 计算这个特定视频的最终步长
-            # final_stride = self.base_sample_stride * max(1, int(video_fps / 24))
+            final_stride = self.base_sample_stride * max(1, int(video_fps / 24))
 
             # 使用动态计算的步长进行验证
             # 允许的误差范围也与步长相关，使其更鲁棒
-            # if abs(video_frame_count - pkl_frame_count * final_stride) > final_stride:
-            #     print(f"Warning: Frame count mismatch for '{file_name}'. "
-            #           f"Pkl: {pkl_frame_count}, Video: {video_frame_count}, Calculated Stride: {final_stride}. "
-            #           f"This pair will be skipped.")
-            #     continue
+            if abs(video_frame_count - pkl_frame_count * final_stride) > final_stride:
+                print(f"Warning: Frame count mismatch for '{file_name}'. "
+                      f"Pkl: {pkl_frame_count}, Video: {video_frame_count}, Calculated Stride: {final_stride}. "
+                      f"This pair will be skipped.")
+                continue
 
             # 验证通过，创建样本
+            start_indices = list(range(0, pkl_frame_count - self.sequence_length + 1, self.sequence_length))
+
+            # last_possible_start = pkl_frame_count - self.sequence_length
+            # if not start_indices or start_indices[-1] < last_possible_start:
+            #     start_indices.append(last_possible_start)
+
+            print(start_indices)
             num_frames = pkl_frame_count
-            for i in range(num_frames - self.sequence_length + 1):
+            for i in start_indices:
                 sequence_dicts = data[i : i + self.sequence_length]
                 keypoints_sequence = np.array([item['keypoints'] for item in sequence_dicts])
                 subset_sequence = np.array([item['subset'] for item in sequence_dicts])
 
                 if self.filter_low_hand_conf(keypoints_sequence):
-                    # 【重要】不再将 video_info 存入样本中
-                    self.samples.append((keypoints_sequence, subset_sequence))
+                    # 【重要】将计算出的 final_stride 存入每个样本中
+                    self.samples.append((keypoints_sequence, subset_sequence, video_file_path, i, final_stride))
                     
         print(f"Total samples created: {len(self.samples)}")
     
@@ -102,8 +105,8 @@ class PoseDataset(Dataset):
         """
         获取样本，使用样本中存储的特定步长来读取视频帧。
         """ 
-        # 从样本中解包，已移除 video_info
-        original_sequence, subset_info = self.samples[idx]
+        # 从样本中解包出为该视频计算好的 final_stride
+        original_sequence, subset_info, video_path, pkl_start_idx, final_stride = self.samples[idx]
         
         # --- 关键点和掩码处理 (无改动) ---
         original_xy = original_sequence[:, :, :2]
@@ -129,5 +132,4 @@ class PoseDataset(Dataset):
         original_xy_tensor = torch.tensor(original_xy, dtype=torch.float32).view(self.sequence_length, -1)
         final_mask_tensor = torch.tensor(final_mask, dtype=torch.bool)
 
-        # 返回值中已移除 video_info
-        return masked_xy_tensor, final_mask_tensor, original_xy_tensor, subset_info #, (video_path, pkl_start_idx, final_stride)
+        return masked_xy_tensor, final_mask_tensor, original_xy_tensor, subset_info, (video_path, pkl_start_idx, final_stride)
