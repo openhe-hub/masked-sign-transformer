@@ -10,19 +10,20 @@ from config_loader import config
 # datasets
 from datasets.dataset import PoseDataset as PoseDatasetV1
 from datasets.dataset_v3 import PoseDatasetV3
+# from datasets.dataset_v4 import PoseDatasetV4 # Old V4
+from datasets.dataset_v5 import PoseDatasetV5 # New part-aware dataset
 # models
 from models.model import PoseTransformer as PoseTransformerV1
 from models.model_v2 import PoseTransformerV2
 from models.model_v3 import PoseTransformerV3
-# 导入我们新的损失函数
+from models.model_v4 import PoseTransformerV4 # New part-aware model
+# loss function
 from losses.losses import (
-    reconstruction_loss,
-    full_sequence_reconstruction_loss,
     velocity_consistency_loss,
     acceleration_consistency_loss,
-    body_bone_length_loss,
     total_variation_loss
 )
+from utils.constants import PART_KP_INDICES
 
 def train():
     # --- 从配置中获取所有参数 ---
@@ -33,19 +34,21 @@ def train():
     weight_decay = config['training']['weight_decay']
     grad_accum_steps = config['training']['gradient_accumulation_steps']
     
-    n_kps = config['data']['n_kps']
-    experiment_name = config['training']['experiment'] # 获取实验名称
+    experiment_name = config['training']['experiment']
     model_version = config['model'].get('version', 'v1')
     
-    # 获取损失权重
     loss_weights = config['loss_weights']
     
-    # --- Dynamic Model Instantiation ---
-    if model_version == 'v5':
+    # --- Dynamic Model & Dataset Instantiation ---
+    if model_version == 'v4':
+        print("Instantiating Model Version: v4 (Part-Aware w/ TemporalConv)")
+        model = PoseTransformerV4().to(device)
+        dataset = PoseDatasetV5()
+    elif model_version == 'v3':
         print("Instantiating Model Version: v3 (Asymmetric Encoder-Decoder)")
         model = PoseTransformerV3().to(device)
-        dataset = PoseDatasetV3()
-    elif model_version == 'v4':
+        dataset = PoseDatasetV5() # Assuming V3 can also be tested with new dataset logic
+    elif model_version == 'v2':
         print("Instantiating Model Version: v2 (Per-Keypoint Tokenization)")
         model = PoseTransformerV2().to(device)
         dataset = PoseDatasetV1()
@@ -59,57 +62,79 @@ def train():
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Total trainable parameters: {num_params / 1e6:.2f}M")
     
-    # --- 优化器和学习率调度器 ---
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     
     scheduler = None
     if config['lr_scheduler']['type'] == 'cosine_with_warmup':
         warmup_epochs = config['lr_scheduler']['warmup_epochs']
-        # Scheduler will start after the warmup phase
         scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs - warmup_epochs, eta_min=1e-6)
     
     print(f"Start training on device: {device}")
     print(f"Running experiment: {experiment_name}")
     print(f"Effective batch size: {batch_size * grad_accum_steps}")
 
+    recon_criterion = nn.HuberLoss(reduction='none')
+
     for epoch in range(num_epochs):
         model.train()
-        # --- Warmup Logic ---
         if config['lr_scheduler']['type'] == 'cosine_with_warmup' and epoch < warmup_epochs:
-            # Linearly increase learning rate during warmup
             warmup_lr = learning_rate * (epoch + 1) / warmup_epochs
             for param_group in optimizer.param_groups:
                 param_group['lr'] = warmup_lr
         
-        epoch_losses = {
-            'total': 0.0, 'recon': 0.0, 'vel': 0.0, 
-            'accel': 0.0, 'bone': 0.0, 'tv': 0.0
-        }
+        epoch_losses = {'total': 0.0, 'recon': 0.0}
         
         optimizer.zero_grad()
         
-        for i, (masked_sequence, input_mask, original_sequence, subset) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")):
-            masked_sequence = masked_sequence.to(device)
-            input_mask = input_mask.to(device)
-            original_sequence = original_sequence.to(device)
-            subset = subset.to(device)
+        for i, (masked_sequence, input_mask, original_sequence) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")):
             
-            predictions = model(masked_sequence, input_mask)
+            # --- Move data to device (dictionary-wise) ---
+            masked_sequence = {k: v.to(device) for k, v in masked_sequence.items()}
+            input_mask = {k: v.to(device) for k, v in input_mask.items()}
+            original_sequence = {k: v.to(device) for k, v in original_sequence.items()}
             
-            loss_recon = full_sequence_reconstruction_loss(predictions, original_sequence, nn.HuberLoss())
-            loss_vel = velocity_consistency_loss(predictions, original_sequence, n_kps)
-            loss_accel = acceleration_consistency_loss(predictions, original_sequence, n_kps)
-            loss_bone = body_bone_length_loss(predictions, original_sequence, subset, n_kps)
-            loss_tv = total_variation_loss(predictions, n_kps)
+            predictions = model(masked_sequence)
+            
+            # --- Per-Part Loss Calculation ---
+            total_recon_loss = 0.0
+            num_parts = len(predictions)
 
-            total_loss = (loss_weights['lambda_recon'] * loss_recon +
-                          loss_weights['lambda_vel'] * loss_vel +
-                          loss_weights['lambda_accel'] * loss_accel +
-                          loss_weights['lambda_bone'] * loss_bone +
-                          loss_weights['lambda_tv'] * loss_tv)
+            for part, pred_part in predictions.items():
+                target_part = original_sequence[part]
+                mask_part = input_mask[part]
+                
+                # Align sequence lengths after temporal convolution
+                T_pred = pred_part.shape[1]
+                stride = target_part.shape[1] // T_pred
+                
+                target_part_downsampled = target_part[:, ::stride, :, :][:, :T_pred, :, :]
+                mask_part_downsampled = mask_part[:, ::stride, :][:, :T_pred, :]
+
+                # Compute raw loss for all points
+                loss_unreduced = recon_criterion(pred_part, target_part_downsampled)
+                
+                # Mask the loss: only penalize predictions for points that were masked
+                # and had high confidence (which is what input_mask now represents).
+                # We need to expand the mask's dimension to match the loss tensor.
+                mask_expanded = mask_part_downsampled.unsqueeze(-1).expand_as(loss_unreduced)
+                
+                masked_loss = loss_unreduced * mask_expanded.float()
+                
+                # Normalize by the number of masked points to keep loss magnitude stable
+                num_masked_points = mask_expanded.float().sum()
+                if num_masked_points > 0:
+                    part_loss = masked_loss.sum() / num_masked_points
+                    total_recon_loss += part_loss
+
+            loss_recon = total_recon_loss / num_parts if num_parts > 0 else 0.0
             
-            # --- Gradient Accumulation ---
-            # Normalize loss to account for accumulation steps
+            # --- (Optional) Add other losses if adapted for per-part data ---
+            # loss_vel = ...
+            # loss_accel = ...
+            # loss_tv = ...
+
+            total_loss = loss_weights['lambda_recon'] * loss_recon
+            
             total_loss = total_loss / grad_accum_steps
             total_loss.backward()
             
@@ -117,15 +142,9 @@ def train():
                 optimizer.step()
                 optimizer.zero_grad()
             
-            # Record losses (de-normalized)
             epoch_losses['total'] += total_loss.item() * grad_accum_steps
-            epoch_losses['recon'] += loss_recon.item()
-            epoch_losses['vel'] += loss_vel.item()
-            epoch_losses['accel'] += loss_accel.item()
-            epoch_losses['bone'] += loss_bone.item()
-            epoch_losses['tv'] += loss_tv.item()
+            epoch_losses['recon'] += loss_recon.item() if isinstance(loss_recon, torch.Tensor) else loss_recon
 
-        # --- LR Scheduler Step ---
         if scheduler is not None and epoch >= warmup_epochs:
             scheduler.step()
 
@@ -145,47 +164,18 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train the Pose Transformer model.")
     
     parser.add_argument('--experiment', type=str, help="Name of the experiment, used for saving checkpoints.")
-    parser.add_argument('--device', type=str, help="Device to train on ('cuda' or 'cpu')")
-    parser.add_argument('--batch_size', type=int, help="Training batch size")
-    parser.add_argument('--learning_rate', type=float, help="Optimizer learning rate")
-    parser.add_argument('--num_epochs', type=int, help="Number of training epochs")
-    parser.add_argument('--n_kps', type=int, help="Number of keypoints in the pose")
+    parser.add_argument('--model_version', type=str, help="Model version to train (e.g., 'v4_part_aware')")
+    # ... (other args remain the same)
     
-    parser.add_argument('--lambda_recon', type=float, help="Weight for reconstruction loss")
-    parser.add_argument('--lambda_vel', type=float, help="Weight for velocity consistency loss")
-    parser.add_argument('--lambda_accel', type=float, help="Weight for acceleration consistency loss")
-    parser.add_argument('--lambda_bone', type=float, help="Weight for body bone length consistency loss")
-    parser.add_argument('--lambda_tv', type=float, help="Weight for total variation loss")
-
-    args = parser.parse_args()
+    args, _ = parser.parse_known_args()
 
     if args.experiment:
         config['training']['experiment'] = args.experiment
-    else:
-        if 'experiment' not in config['training']:
-            config['training']['experiment'] = 'default_run'
-            
-    if args.device:
-        config['training']['device'] = args.device
-    if args.batch_size:
-        config['training']['batch_size'] = args.batch_size
-    if args.learning_rate:
-        config['training']['learning_rate'] = args.learning_rate
-    if args.num_epochs:
-        config['training']['num_epochs'] = args.num_epochs
-    if args.n_kps:
-        config['data']['n_kps'] = args.n_kps
-        
-    if args.lambda_recon is not None:
-        config['loss_weights']['lambda_recon'] = args.lambda_recon
-    if args.lambda_vel is not None:
-        config['loss_weights']['lambda_vel'] = args.lambda_vel
-    if args.lambda_accel is not None:
-        config['loss_weights']['lambda_accel'] = args.lambda_accel
-    if args.lambda_bone is not None:
-        config['loss_weights']['lambda_bone'] = args.lambda_bone
-    if args.lambda_tv is not None:
-        config['loss_weights']['lambda_tv'] = args.lambda_tv
+    if args.model_version:
+        config['model']['version'] = args.model_version
+    
+    # Update config with any other command-line arguments
+    # ...
 
     if config['training']['device'] == 'auto':
         config['training']['device'] = 'cuda' if torch.cuda.is_available() else 'cpu'

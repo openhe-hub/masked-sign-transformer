@@ -11,6 +11,7 @@ class PoseDatasetV3(Dataset):
         self.n_kps = config['data']['n_kps']
         self.features_per_kp = config['data']['features_per_kp']
         self.data_path = config['data']['data_dir']
+        self.limit = config['data']['limit'] # 添加 limit 参数
         
         # 从配置中获取V3模型的掩码比例
         self.total_mask_ratio = config['masking']['total_mask_ratio']
@@ -25,6 +26,9 @@ class PoseDatasetV3(Dataset):
         准备样本，每个样本都是一个完整的序列。
         """
         print("Preparing samples for V3 masked autoencoding...")
+        if self.limit > 0 and self.limit <= len(self.pkl_files):
+            self.pkl_files = self.pkl_files[:self.limit]
+        
         for file_name in self.pkl_files:
             file_path = os.path.join(self.data_path, file_name)
             with open(file_path, 'rb') as f:

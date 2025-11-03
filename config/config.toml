@@ -1,17 +1,17 @@
 # Pose Transformer Project Configuration
 
 [data]
-data_dir = "./data/chatsign_50k"          # pkl数据目录 (路径相对于项目根目录)
+data_dir = "./data/Asl-pose-normalized"          # pkl数据目录 (路径相对于项目根目录)
 video_dir = "./data/chatsign_200_videos"
 ref_img_path = "./assets/img/test2.jpg"
 ref_img_pose = "./assets/pose/test2.pkl"
 sequence_length = 16          # 输入序列的长度（看过去多少帧）
-n_kps = 128                   # 每帧的关键点数量
+n_kps = 69                   # 每帧的关键点数量
 features_per_kp = 3           # 每个关键点的特征数 (x, y) # confidence
-limit = 1000
+limit = 200
 
 [model]
-version = "v3"                # Model version to use
+version = "v4"                # Model version to use
 # d_model 必须能被 n_head 整-除
 d_model = 768                 # Transformer的内部维度 (提升)
 n_head = 12                   # 多头注意力的头数 (提升)
@@ -25,14 +25,31 @@ decoder_n_head = 6            # Decoder的多头注意力的头数 (提升)
 num_decoder_layers = 4        # Decoder的层数 (提升)
 decoder_dim_feedforward = 1536 # Decoder的前馈网络的维度 (decoder_d_model * 4)
 
+[model_v3]
+# Asymmetric Encoder-Decoder Transformer
+encoder_hidden_dim = 512
+encoder_num_heads = 8
+encoder_num_layers = 6
+decoder_hidden_dim = 256
+decoder_num_heads = 8
+decoder_num_layers = 6
+dropout = 0.1
+
+[model_v4]
+# Part-aware Transformer w/ Temporal Convolutions
+hidden_dim = 256
+num_heads = 8
+num_layers = 4
+dropout = 0.1
+
 [training]
+experiment = "v5-mid-cosign"
+device = "auto" # "cuda", "cpu", "auto"
 batch_size = 32
-learning_rate = 0.0005        # 初始最大学习率
-num_epochs = 500              # 增加训练轮次以适应大数据集
-weight_decay = 0.05           # AdamW的权重衰减
-gradient_accumulation_steps = 4 # 梯度累积步数, 有效batch_size = 32 * 4 = 128
-# device: "cuda", "cpu", or "auto" for automatic detection
-device = "auto"
+learning_rate = 1e-4
+num_epochs = 500
+weight_decay = 0.01
+gradient_accumulation_steps = 4
 
 [lr_scheduler]
 # "cosine_with_warmup" or "none"
@@ -48,7 +65,7 @@ confidence_threshold = 0.3
 [loss_weights]
 # 这些是超参数，需要仔细调整。建议从一个较小的值开始。
 lambda_recon = 1.0     # 重建损失权重
-lambda_vel = 0.1     # 速度损失权重
-lambda_accel = 0.1   # 加速度损失权重
-lambda_bone = 0.1    # 骨骼长度损失权重
-lambda_tv = 0.01     # 总变差正则化权重
+lambda_vel = 0#.1     # 速度损失权重
+lambda_accel = 0#.1   # 加速度损失权重
+lambda_bone = 0#.1    # 骨骼长度损失权重
+lambda_tv = 0#.01     # 总变差正则化权重

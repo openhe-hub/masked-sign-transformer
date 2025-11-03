@@ -13,6 +13,7 @@ from models.model_v2 import PoseTransformerV2
 from models.model_v3 import PoseTransformerV3
 from datasets.dataset import PoseDataset as PoseDatasetV1
 from datasets.dataset_v3 import PoseDatasetV3
+from datasets.dataset_v5 import PoseDatasetV5
 from losses.losses import body_bone_length_loss, velocity_consistency_loss
 
 def evaluate(checkpoint_path, output_name=None):
@@ -34,7 +35,7 @@ def evaluate(checkpoint_path, output_name=None):
     if model_version == 'v5':
         print("Instantiating Model Version: v3 (Asymmetric Encoder-Decoder)")
         model = PoseTransformerV3().to(device)
-        dataset = PoseDatasetV3()
+        dataset = PoseDatasetV5()
     elif model_version == 'v4':
         print("Instantiating Model Version: v2 (Per-Keypoint Tokenization)")
         model = PoseTransformerV2().to(device)
@@ -62,11 +63,11 @@ def evaluate(checkpoint_path, output_name=None):
 
     print("Starting evaluation...")
     with torch.no_grad():
-        for masked_sequence, mask, original_sequence, subset in tqdm(eval_loader, desc="Evaluating"):
+        for masked_sequence, mask, original_sequence in tqdm(eval_loader, desc="Evaluating"):
             masked_sequence = masked_sequence.to(device)
             mask = mask.to(device)
             original_sequence = original_sequence.to(device)
-            subset = subset.to(device)
+            # subset = subset.to(device)
 
             # --- Get Model Predictions ---
             predictions = model(masked_sequence, mask)
@@ -101,7 +102,7 @@ def evaluate(checkpoint_path, output_name=None):
             per_joint_mask_count += torch.sum(mask_struct, dim=0)
 
             # 3. Body Bone Length Error (on the full pose)
-            total_bone_error += body_bone_length_loss(predictions, original_sequence, subset, n_kps).item()
+            # total_bone_error += body_bone_length_loss(predictions, original_sequence, subset, n_kps).item()
             
             # 4. Velocity Error (on the full sequence)
             total_velocity_error += velocity_consistency_loss(predictions, original_sequence, n_kps).item()
