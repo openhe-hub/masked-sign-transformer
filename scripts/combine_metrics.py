@@ -9,7 +9,7 @@ def compile_metrics_to_csv():
     'overall_metrics', and compiles them into a single CSV file.
     """
     metrics_dir = os.path.join('output', 'metrics')
-    output_csv_path = os.path.join('output', 'metrics_summary.csv')
+    output_csv_path = os.path.join('output', 'metrics/metrics_summary.csv')
     
     # Use glob to find all json files, ignoring .gitignore rules
     json_files = glob.glob(os.path.join(metrics_dir, '*.json'))

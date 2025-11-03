@@ -5,6 +5,9 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm
 import os
 import argparse
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
 
 from config_loader import config
 # datasets
@@ -25,9 +28,24 @@ from losses.losses import (
 )
 from utils.constants import PART_KP_INDICES
 
+def setup_ddp():
+    """Initializes the distributed process group."""
+    dist.init_process_group(backend="nccl")
+    torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+
+def cleanup_ddp():
+    """Cleans up the distributed process group."""
+    dist.destroy_process_group()
+
 def train():
+    # --- DDP Setup ---
+    setup_ddp()
+    local_rank = int(os.environ["LOCAL_RANK"])
+    world_size = dist.get_world_size()
+    is_main_process = local_rank == 0
+    device = f'cuda:{local_rank}'
+
     # --- 从配置中获取所有参数 ---
-    device = config['training']['device']
     batch_size = config['training']['batch_size']
     learning_rate = config['training']['learning_rate']
     num_epochs = config['training']['num_epochs']
@@ -40,27 +58,30 @@ def train():
     loss_weights = config['loss_weights']
     
     # --- Dynamic Model & Dataset Instantiation ---
+    if is_main_process:
+        print(f"Instantiating Model Version: {model_version}")
+
     if model_version == 'v4':
-        print("Instantiating Model Version: v4 (Part-Aware w/ TemporalConv)")
         model = PoseTransformerV4().to(device)
         dataset = PoseDatasetV5()
     elif model_version == 'v3':
-        print("Instantiating Model Version: v3 (Asymmetric Encoder-Decoder)")
-        model = PoseTransformerV4().to(device)
-        dataset = PoseDatasetV3() # Assuming V3 can also be tested with new dataset logic
+        model = PoseTransformerV3().to(device)
+        dataset = PoseDatasetV5()
     elif model_version == 'v2':
-        print("Instantiating Model Version: v2 (Per-Keypoint Tokenization)")
         model = PoseTransformerV2().to(device)
         dataset = PoseDatasetV1()
     else:
-        print("Instantiating Model Version: v1 (Frame-level Tokenization)")
         model = PoseTransformerV1().to(device)
         dataset = PoseDatasetV1()
     
-    train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    model = DDP(model, device_ids=[local_rank])
+    
+    train_sampler = DistributedSampler(dataset, num_replicas=world_size, rank=local_rank)
+    train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, sampler=train_sampler)
 
-    num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Total trainable parameters: {num_params / 1e6:.2f}M")
+    if is_main_process:
+        num_params = sum(p.numel() for p in model.module.parameters() if p.requires_grad)
+        print(f"Total trainable parameters: {num_params / 1e6:.2f}M")
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     
@@ -69,14 +90,17 @@ def train():
         warmup_epochs = config['lr_scheduler']['warmup_epochs']
         scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs - warmup_epochs, eta_min=1e-6)
     
-    print(f"Start training on device: {device}")
-    print(f"Running experiment: {experiment_name}")
-    print(f"Effective batch size: {batch_size * grad_accum_steps}")
+    if is_main_process:
+        print(f"Start training on {world_size} GPUs.")
+        print(f"Running experiment: {experiment_name}")
+        print(f"Effective batch size: {batch_size * grad_accum_steps * world_size}")
 
     recon_criterion = nn.HuberLoss(reduction='none')
 
     for epoch in range(num_epochs):
         model.train()
+        train_sampler.set_epoch(epoch) # Important for shuffling
+
         if config['lr_scheduler']['type'] == 'cosine_with_warmup' and epoch < warmup_epochs:
             warmup_lr = learning_rate * (epoch + 1) / warmup_epochs
             for param_group in optimizer.param_groups:
@@ -86,7 +110,10 @@ def train():
         
         optimizer.zero_grad()
         
-        for i, (masked_sequence, input_mask, original_sequence) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")):
+        # Progress bar only on the main process
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}", disable=not is_main_process)
+        
+        for i, (masked_sequence, input_mask, original_sequence) in enumerate(pbar):
             
             # --- Move data to device (dictionary-wise) ---
             masked_sequence = {k: v.to(device) for k, v in masked_sequence.items()}
@@ -103,24 +130,16 @@ def train():
                 target_part = original_sequence[part]
                 mask_part = input_mask[part]
                 
-                # Align sequence lengths after temporal convolution
                 T_pred = pred_part.shape[1]
                 stride = target_part.shape[1] // T_pred
                 
                 target_part_downsampled = target_part[:, ::stride, :, :][:, :T_pred, :, :]
                 mask_part_downsampled = mask_part[:, ::stride, :][:, :T_pred, :]
 
-                # Compute raw loss for all points
                 loss_unreduced = recon_criterion(pred_part, target_part_downsampled)
-                
-                # Mask the loss: only penalize predictions for points that were masked
-                # and had high confidence (which is what input_mask now represents).
-                # We need to expand the mask's dimension to match the loss tensor.
                 mask_expanded = mask_part_downsampled.unsqueeze(-1).expand_as(loss_unreduced)
-                
                 masked_loss = loss_unreduced * mask_expanded.float()
                 
-                # Normalize by the number of masked points to keep loss magnitude stable
                 num_masked_points = mask_expanded.float().sum()
                 if num_masked_points > 0:
                     part_loss = masked_loss.sum() / num_masked_points
@@ -128,11 +147,6 @@ def train():
 
             loss_recon = total_recon_loss / num_parts if num_parts > 0 else 0.0
             
-            # --- (Optional) Add other losses if adapted for per-part data ---
-            # loss_vel = ...
-            # loss_accel = ...
-            # loss_tv = ...
-
             total_loss = loss_weights['lambda_recon'] * loss_recon
             
             total_loss = total_loss / grad_accum_steps
@@ -148,24 +162,27 @@ def train():
         if scheduler is not None and epoch >= warmup_epochs:
             scheduler.step()
 
-        num_batches = len(train_loader)
-        print(f"Epoch {epoch+1} completed. Current LR: {optimizer.param_groups[0]['lr']:.6f}")
-        for loss_name, loss_val in epoch_losses.items():
-            print(f"  - Avg {loss_name}: {loss_val / num_batches:.6f}")
+        if is_main_process:
+            num_batches = len(train_loader)
+            print(f"Epoch {epoch+1} completed. Current LR: {optimizer.param_groups[0]['lr']:.6f}")
+            for loss_name, loss_val in epoch_losses.items():
+                print(f"  - Avg {loss_name}: {loss_val / num_batches:.6f}")
 
-        if (epoch + 1) % 10 == 0:
-            checkpoints_dir = os.path.join("checkpoints", experiment_name)
-            os.makedirs(checkpoints_dir, exist_ok=True)
-            save_path = os.path.join(checkpoints_dir, f"{experiment_name}_epoch_{epoch+1}.pth")
-            torch.save(model.state_dict(), save_path)
-            print(f"Model saved to {save_path}")
+            if (epoch + 1) % 10 == 0:
+                checkpoints_dir = os.path.join("checkpoints", experiment_name)
+                os.makedirs(checkpoints_dir, exist_ok=True)
+                save_path = os.path.join(checkpoints_dir, f"{experiment_name}_epoch_{epoch+1}.pth")
+                # Save the original model's state dict
+                torch.save(model.module.state_dict(), save_path)
+                print(f"Model saved to {save_path}")
+    
+    cleanup_ddp()
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train the Pose Transformer model.")
+    parser = argparse.ArgumentParser(description="Train the Pose Transformer model with DDP.")
     
     parser.add_argument('--experiment', type=str, help="Name of the experiment, used for saving checkpoints.")
-    parser.add_argument('--model_version', type=str, help="Model version to train (e.g., 'v4_part_aware')")
-    # ... (other args remain the same)
+    parser.add_argument('--model_version', type=str, help="Model version to train (e.g., 'v4')")
     
     args, _ = parser.parse_known_args()
 
@@ -174,10 +191,4 @@ if __name__ == "__main__":
     if args.model_version:
         config['model']['version'] = args.model_version
     
-    # Update config with any other command-line arguments
-    # ...
-
-    if config['training']['device'] == 'auto':
-        config['training']['device'] = 'cuda' if torch.cuda.is_available() else 'cpu'
-
     train()

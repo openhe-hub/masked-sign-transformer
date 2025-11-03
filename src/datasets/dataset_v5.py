@@ -50,6 +50,10 @@ class PoseDatasetV5(Dataset):
             
             # Create sliding window sequences
             for i in range(num_frames - self.sequence_length + 1):
+                # body = (N_frame, N_body, 3) = (16, 9, 3)
+                # right = (N_right, N_body, 3) = (16, 21, 3)
+                # left = (N_left, N_body, 3) = (16, 21, 3)
+                # right = (N_right, N_face, 3) = (16, 18, 3)
                 sequence_sample = {
                     part: data_dict[part][i : i + self.sequence_length]
                     for part in self.parts

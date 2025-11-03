@@ -14,8 +14,8 @@ TOTAL_KEYPOINTS = 133 # Example value, adjust if necessary
 # face: simplified face landmarks = 18 keypoints
 
 PART_KP_INDICES = {
-    'body': [0, 3, 4, 5, 6, 7, 8, 9, 10],
-    'face_all': list(range(70, 88)), # Simplified face (18 kps)
+    'body': list(range(0, 18)),
+    # 'face_all': list(range(70, 88)), # Simplified face (18 kps)
     'left': list(range(91, 112)),   # Left hand (21 kps)
     'right': list(range(112, 133)), # Right hand (21 kps)
 }
