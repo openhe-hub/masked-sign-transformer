@@ -86,7 +86,7 @@ def train():
         
         optimizer.zero_grad()
         
-        for i, (masked_sequence, input_mask, original_sequence) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")):
+        for i, (masked_sequence, input_mask, original_sequence, meta_info) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")):
             
             # --- Move data to device (dictionary-wise) ---
             masked_sequence = {k: v.to(device) for k, v in masked_sequence.items()}
@@ -109,6 +109,8 @@ def train():
                 
                 target_part_downsampled = target_part[:, ::stride, :, :][:, :T_pred, :, :]
                 mask_part_downsampled = mask_part[:, ::stride, :][:, :T_pred, :]
+
+                import ipdb; ipdb.set_trace()
 
                 # Compute raw loss for all points
                 loss_unreduced = recon_criterion(pred_part, target_part_downsampled)

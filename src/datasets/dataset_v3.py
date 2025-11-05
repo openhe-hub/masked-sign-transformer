@@ -5,6 +5,7 @@ import os
 import pickle
 from config_loader import config
 from utils.constants import PART_KP_INDICES
+from tqdm import tqdm
 
 class PoseDatasetV3(Dataset):
     def __init__(self):
@@ -30,7 +31,7 @@ class PoseDatasetV3(Dataset):
         if self.limit > 0 and self.limit <= len(self.pkl_files):
             self.pkl_files = self.pkl_files[:self.limit]
          
-        for file_name in self.pkl_files:
+        for file_name in tqdm(self.pkl_files):
             file_path = os.path.join(self.data_path, file_name)
             with open(file_path, 'rb') as f:
                 data = pickle.load(f)
@@ -46,14 +47,20 @@ class PoseDatasetV3(Dataset):
                     'left': keypoints_sequence[:, 107:128, :],
                     'right': keypoints_sequence[:, 86:107, :],
                 }
-                self.samples.append(keypoints_sequence_part)
+                meta_info = {
+                    'filename': file_name,
+                    'norm_params': [item['norm_params'] for item in sequence_dicts],  # (N_frame, )
+                    'subset': [item['subset'] for item in sequence_dicts],
+                    'face_keypoints': [item['keypoints'][18:86] for item in sequence_dicts],
+                }
+                self.samples.append((keypoints_sequence_part, meta_info))
         print(f"Total samples created for V3: {len(self.samples)}")
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        sequence_data = self.samples[idx]
+        sequence_data, meta_info = self.samples[idx]
         
         masked_sequence_dict = {}
         input_mask_dict = {}
@@ -104,4 +111,4 @@ class PoseDatasetV3(Dataset):
             original_sequence_dict[part] = torch.tensor(normalized_xy, dtype=torch.float32)
             input_mask_dict[part] = torch.tensor(final_mask, dtype=torch.bool)
 
-        return masked_sequence_dict, input_mask_dict, original_sequence_dict
+        return masked_sequence_dict, input_mask_dict, original_sequence_dict, meta_info

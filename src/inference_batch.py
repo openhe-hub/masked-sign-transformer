@@ -8,6 +8,7 @@ from config_loader import config
 from models.model import PoseTransformer as PoseTransformerV1
 from models.model_v2 import PoseTransformerV2
 from models.model_v3 import PoseTransformerV3
+from models.model_v4 import PoseTransformerV4
 from datasets.dataset import PoseDataset as PoseDatasetV1
 from datasets.dataset_v3 import PoseDatasetV3
 from utils.render import draw_pose
@@ -83,10 +84,10 @@ def inference(checkpoint_path, output_path="reconstructed_sequence.mp4", index_r
         print("Instantiating Model Version: v3 (Asymmetric Encoder-Decoder)")
         model = PoseTransformerV3().to(device)
         dataset = PoseDatasetV3()
-    elif model_version == 'v4':
+    elif model_version == 'v3':
         print("Instantiating Model Version: v2 (Per-Keypoint Tokenization)")
-        model = PoseTransformerV2().to(device)
-        dataset = PoseDatasetV1()
+        model = PoseTransformerV4().to(device)
+        dataset = PoseDatasetV3()
     else:
         print("Instantiating Model Version: v1 (Frame-level Tokenization)")
         model = PoseTransformerV1().to(device)

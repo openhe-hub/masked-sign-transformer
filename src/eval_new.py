@@ -9,6 +9,7 @@ from tqdm import tqdm
 from config_loader import config
 # 确保导入正确的模型和数据集
 from models.model_v4 import PoseTransformerV4
+from datasets.dataset_v3 import PoseDatasetV3
 from datasets.dataset_v5 import PoseDatasetV5
 
 def evaluate(checkpoint_path, output_name=None):
@@ -21,16 +22,13 @@ def evaluate(checkpoint_path, output_name=None):
     batch_size = config['training'].get('batch_size', 16)
     model_version = config['model'].get('version', 'v4')
 
-    if model_version != 'v4':
-        raise ValueError(f"This evaluation script is designed for model_version 'v4', but config specifies '{model_version}'")
-
     # --- 模型和数据加载 ---
     print("Instantiating Model Version: v4 (Part-Aware w/ TemporalConv)")
     model = PoseTransformerV4().to(device)
     
     # 使用与训练时相同的数据集
     # 注意：数据集内部的随机遮挡对于评估是有效的，因为它模拟了真实世界中的缺失数据
-    dataset = PoseDatasetV5()
+    dataset = PoseDatasetV3()
     eval_loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
         
     # 加载模型权重

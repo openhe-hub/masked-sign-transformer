@@ -35,7 +35,13 @@ def draw_bodypose(canvas, candidate, subset, color, mask=None):
             length = ((X[0] - X[1]) ** 2 + (Y[0] - Y[1]) ** 2) ** 0.5
             angle = math.degrees(math.atan2(X[0] - X[1], Y[0] - Y[1]))
             polygon = cv2.ellipse2Poly((int(mY), int(mX)), (int(length / 2), stickwidth), int(angle), 0, 360, 1)
-            cv2.fillConvexPoly(canvas, polygon, bone_color)
+            line_color = bone_color
+            if mask is not None:
+                indices_int = index.astype(int)
+                valid_indices = [idx for idx in indices_int if 0 <= idx < len(mask)]
+                if any(mask[idx] for idx in valid_indices):
+                    line_color = red
+            cv2.fillConvexPoly(canvas, polygon, line_color)
 
     # Draw keypoints
     # Iterate through the 18 body part indices in the subset
