@@ -16,6 +16,8 @@ class PoseDatasetV3(Dataset):
         self.limit = config['data']['limit']
         
         self.total_mask_ratio = config['masking']['total_mask_ratio']
+        self.spatial_mask_ratio = config['masking']['spatial_mask_ratio']
+        self.temporal_mask_ratio = config['masking']['temporal_mask_ratio']
         self.conf_threshold = config['masking']['confidence_threshold']
         
         self.pkl_files = [f for f in os.listdir(self.data_path) if f.endswith('.pkl')]
@@ -73,33 +75,50 @@ class PoseDatasetV3(Dataset):
             normalized_xy = part_data[:, :, :2]
             confidence_scores = part_data[:, :, 2]
             
-            # 1. Create mask based on low confidence
+            # 1. 基于置信度阈值的初始掩码
             confidence_mask = confidence_scores < self.conf_threshold
-            
-            # 2. Determine number of additional random masks needed for this part
-            total_tokens = self.sequence_length * n_kps_part
-            num_total_masks = int(total_tokens * self.total_mask_ratio)
-            
             final_mask = np.copy(confidence_mask)
-            num_already_masked = np.sum(final_mask)
-            num_additional_masks_needed = max(0, num_total_masks - num_already_masked)
-            
-            # 3. Apply random masks
-            candidate_indices = np.where(final_mask == False)
-            candidate_indices_flat = np.ravel_multi_index(
-                candidate_indices, (self.sequence_length, n_kps_part)
-            )
-            
-            if len(candidate_indices_flat) > num_additional_masks_needed:
-                additional_masked_indices_flat = np.random.choice(
-                    candidate_indices_flat, 
-                    num_additional_masks_needed, 
-                    replace=False
-                )
-                additional_masked_indices = np.unravel_index(
-                    additional_masked_indices_flat, (self.sequence_length, n_kps_part)
-                )
-                final_mask[additional_masked_indices] = True
+
+            # 2. 时间掩码：抽取指定比例的整帧
+            temporal_mask = np.zeros(self.sequence_length, dtype=bool)
+            if self.temporal_mask_ratio > 0:
+                num_temporal_frames = int(round(self.sequence_length * self.temporal_mask_ratio))
+                num_temporal_frames = max(1, num_temporal_frames)
+                num_temporal_frames = min(num_temporal_frames, self.sequence_length)
+
+                frame_candidates = np.where(~final_mask.all(axis=1))[0]
+                if frame_candidates.size == 0:
+                    frame_candidates = np.arange(self.sequence_length)
+
+                if frame_candidates.size < num_temporal_frames:
+                    num_temporal_frames = frame_candidates.size
+
+                if num_temporal_frames > 0:
+                    chosen_frames = np.random.choice(frame_candidates, size=num_temporal_frames, replace=False)
+                    temporal_mask[chosen_frames] = True
+                    final_mask[temporal_mask, :] = True
+
+            # 3. 空间掩码：在剩余帧上按节点级别抽取
+            if self.spatial_mask_ratio > 0:
+                total_tokens = self.sequence_length * n_kps_part
+                num_spatial_masks = int(round(total_tokens * self.spatial_mask_ratio))
+                num_spatial_masks = max(1, num_spatial_masks)
+
+                available_rows, available_cols = np.where((~temporal_mask[:, None]) & (~final_mask))
+                candidate_count = available_rows.size
+
+                if candidate_count < num_spatial_masks:
+                    num_spatial_masks = candidate_count
+
+                if num_spatial_masks > 0:
+                    candidate_flat = np.ravel_multi_index(
+                        (available_rows, available_cols), (self.sequence_length, n_kps_part)
+                    )
+                    selected_flat = np.random.choice(candidate_flat, size=num_spatial_masks, replace=False)
+                    selected_rows, selected_cols = np.unravel_index(
+                        selected_flat, (self.sequence_length, n_kps_part)
+                    )
+                    final_mask[selected_rows, selected_cols] = True
 
             # 4. Create masked input sequence
             masked_xy_sequence = np.copy(normalized_xy)

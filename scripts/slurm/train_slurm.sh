@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=pose_transformer
+#SBATCH --job-name=mimicmotion
 #SBATCH --output=train_%j.out
 #SBATCH --error=train_%j.err
 #SBATCH --time=04:00:00
@@ -40,12 +40,11 @@ nvidia-smi --query-gpu=name,memory.total --format=csv
 
 # Run training with optional command line arguments
 # You can override config settings via command line
-python src/train.py \
-    --experiment "v3-large" \
-    --device cuda \
-    --batch_size 64 \
-    --learning_rate 0.0001 \
-    --num_epochs 100
+python python batch_process.py \
+  --video-list video-trans-job/AslToHiya-01.csv \
+  --image assets/example_data/images/test2.jpg \
+  --output outputs/AslToHiya-01 \
+  --mode square
 
 # Print job completion info
 echo "Job completed at: $(date)"

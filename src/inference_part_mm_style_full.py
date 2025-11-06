@@ -13,6 +13,7 @@ from datasets.dataset_v3_continuous import PoseDatasetV3Continuous
 from models.model_v4 import PoseTransformerV4
 from utils.face_processing import align_face_inplace, graft_upper_body_inplace
 from utils.render_conf import draw_pose
+from utils.interpolate_xy import interpolate_xy
 
 from inference_part import (
     PART_TO_GLOBAL_INDICES,
@@ -83,6 +84,7 @@ def inference(
     width: int,
     fps: int,
     seed: int,
+    interp_frames: int,
 ) -> None:
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -101,6 +103,8 @@ def inference(
     os.makedirs(output_dir, exist_ok=True)
 
     accumulated_sequences: Dict[str, List[np.ndarray]] = {}
+    accumulated_keypoints: Dict[str, List[np.ndarray]] = {}
+    accumulated_subsets: Dict[str, List[np.ndarray]] = {}
 
     with open(config['data']['ref_img_pose_im'], 'rb') as fp:
         ref_pixels = pickle.load(fp)
@@ -153,13 +157,51 @@ def inference(
 
         frames = sequence_to_frames_mm(reconstructed_full, subset, ref_pixels.shape[1], ref_pixels.shape[2])
         accumulated_sequences.setdefault(filename, []).append(frames)
+        accumulated_keypoints.setdefault(filename, []).append(reconstructed_full)
+        accumulated_subsets.setdefault(filename, []).append(subset)
 
     os.makedirs("output/bridge/chatsign_50k_bridge", exist_ok=True)
     for filename, frame_chunks in accumulated_sequences.items():
         video_poses = np.concatenate(frame_chunks, axis=0)
+        chunk_keypoints = accumulated_keypoints[filename]
+        chunk_subsets = accumulated_subsets[filename]
         pose_pixels = np.concatenate([np.expand_dims(ref_pixels, axis=0), video_poses], axis=0)
         pose_pixels = torch.from_numpy(pose_pixels.copy()) / 127.5 - 1
         export_dict = {'pose_pixels': pose_pixels}
+
+        transition_frames_np: Optional[np.ndarray] = None
+        if interp_frames > 0 and len(chunk_keypoints) > 1:
+            transition_sequences: List[np.ndarray] = []
+            transition_subsets: List[np.ndarray] = []
+            per_pair_steps = interp_frames + 2
+            for chunk_idx in range(len(chunk_keypoints) - 1):
+                start_pose = chunk_keypoints[chunk_idx][-1]
+                end_pose = chunk_keypoints[chunk_idx + 1][0]
+                interpolated = interpolate_xy(
+                    start_pose,
+                    end_pose,
+                    num_steps=per_pair_steps,
+                    drop_endpoints=True,
+                )
+                if interpolated.size == 0:
+                    continue
+                subset_template = chunk_subsets[chunk_idx][-1]
+                repeated_subset = np.repeat(subset_template[np.newaxis, ...], interpolated.shape[0], axis=0)
+                transition_sequences.append(interpolated)
+                transition_subsets.append(repeated_subset)
+
+            if transition_sequences:
+                transition_keypoints = np.concatenate(transition_sequences, axis=0)
+                transition_subset = np.concatenate(transition_subsets, axis=0)
+                transition_frames_np = sequence_to_frames_mm(
+                    transition_keypoints,
+                    transition_subset,
+                    ref_pixels.shape[1],
+                    ref_pixels.shape[2],
+                )
+                pose_pixels_interp = torch.from_numpy(transition_frames_np.copy()) / 127.5 - 1
+                export_dict['pose_pixels_interpolation'] = pose_pixels_interp
+
         output_path = Path("output/bridge/chatsign_50k_bridge") / filename
         with open(output_path, 'wb') as fp:
             pickle.dump(export_dict, fp)
@@ -175,6 +217,18 @@ def inference(
             width=width,
         )
         print(f"[{filename}] exported video to {video_output_path}")
+
+        if transition_frames_np is not None:
+            interp_fps = 1
+            interp_video_path = Path(output_dir) / f"{Path(video_filename).stem}_interp.mp4"
+            export_video_from_frames(
+                transition_frames_np,
+                interp_video_path,
+                fps=interp_fps,
+                height=height,
+                width=width,
+            )
+            print(f"[{filename}] exported interpolation video to {interp_video_path} (fps={interp_fps})")
 
 
 def parse_args() -> argparse.Namespace:
@@ -198,7 +252,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--width", type=int, default=1080, help="Output video width.")
     parser.add_argument("--fps", type=int, default=30, help="Output video frames per second.")
     parser.add_argument("--seed", type=int, default=0, help="Random seed for reproducibility.")
-    return parser.parse_args()
+    parser.add_argument(
+        "--interp-frames",
+        type=int,
+        default=0,
+        help="Number of in-between frames to synthesize per pair using XY interpolation.",
+    )
+    args = parser.parse_args()
+    if args.interp_frames < 0:
+        parser.error("--interp-frames must be non-negative.")
+    return args
 
 
 if __name__ == "__main__":
@@ -211,4 +274,5 @@ if __name__ == "__main__":
         width=args.width,
         fps=args.fps,
         seed=args.seed,
+        interp_frames=args.interp_frames,
     )

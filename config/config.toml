@@ -1,7 +1,7 @@
 # Pose Transformer Project Configuration
 
 [data]
-data_dir = "./data/stage1_pre_norm"          # pkl数据目录 (路径相对于项目根目录)
+data_dir = "./data/chatsign_50k_norm"          # pkl数据目录 (路径相对于项目根目录)
 video_dir = "./data/chatsign_200_videos"
 ref_img_path = "./assets/img/test2.jpg"
 ref_img_pose = "./assets/pose/ref.pkl"
@@ -9,7 +9,7 @@ ref_img_pose_im = "./assets/pose/test2.pkl"
 sequence_length = 16          # 输入序列的长度（看过去多少帧）
 n_kps = 69                   # 每帧的关键点数量
 features_per_kp = 3           # 每个关键点的特征数 (x, y) # confidence
-limit = 10
+limit = 100
 
 [model]
 version = "v3"                # Model version to use
@@ -66,7 +66,7 @@ confidence_threshold = 0.3
 [loss_weights]
 # 这些是超参数，需要仔细调整。建议从一个较小的值开始。
 lambda_recon = 1.0     # 重建损失权重
-lambda_vel = 0#.1     # 速度损失权重
-lambda_accel = 0#.1   # 加速度损失权重
-lambda_bone = 0#.1    # 骨骼长度损失权重
-lambda_tv = 0#.01     # 总变差正则化权重
+lambda_vel = 0.1     # 速度损失权重
+lambda_accel = 0.1   # 加速度损失权重
+lambda_bone = 0.05    # 骨骼长度损失权重
+lambda_tv = 0.01     # 总变差正则化权重
