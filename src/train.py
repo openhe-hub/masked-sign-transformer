@@ -286,6 +286,7 @@ if __name__ == "__main__":
     parser.add_argument('--model_version', type=str, help="Model version to train (e.g., 'v4_part_aware')")
     parser.add_argument('--temporal_mask_ratio', type=float, help="Override temporal masking ratio used by the dataset.")
     parser.add_argument('--spatial_mask_ratio', type=float, help="Override spatial masking ratio used by the dataset.")
+    parser.add_argument('--confidence_threshold', type=float, help="Override confidence threshold used for masking low-quality keypoints.")
     # ... (other args remain the same)
     
     args, _ = parser.parse_known_args()
@@ -298,6 +299,8 @@ if __name__ == "__main__":
         config['masking']['temporal_mask_ratio'] = args.temporal_mask_ratio
     if args.spatial_mask_ratio is not None:
         config['masking']['spatial_mask_ratio'] = args.spatial_mask_ratio
+    if args.confidence_threshold is not None:
+        config['masking']['confidence_threshold'] = args.confidence_threshold
     
     # Update config with any other command-line arguments
     # ...

@@ -219,7 +219,7 @@ def inference(
         print(f"[{filename}] exported video to {video_output_path}")
 
         if transition_frames_np is not None:
-            interp_fps = 1
+            interp_fps = 3
             interp_video_path = Path(output_dir) / f"{Path(video_filename).stem}_interp.mp4"
             export_video_from_frames(
                 transition_frames_np,

@@ -53,9 +53,10 @@ class PoseDatasetV3Continuous(Dataset):
                 continue
 
             start_indices = list(range(0, num_frames - self.sequence_length + 1, self.window_stride))
-            last_possible_start = num_frames - self.sequence_length
-            if not start_indices or start_indices[-1] != last_possible_start:
-                start_indices.append(last_possible_start)
+            # last_possible_start = num_frames - self.sequence_length
+            # if not start_indices or start_indices[-1] != last_possible_start:
+            #     start_indices.append(last_possible_start)
+            print(f"{file_name}, {start_indices}")
 
             for start in start_indices:
                 sequence_dicts = data[start : start + self.sequence_length]
