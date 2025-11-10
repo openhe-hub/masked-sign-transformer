@@ -7,12 +7,13 @@ import cv2
 import numpy as np
 import torch
 import pickle
+from tqdm.auto import tqdm
 
 from config_loader import config
 from datasets.dataset_v3_continuous import PoseDatasetV3Continuous
 from models.model_v4 import PoseTransformerV4
 from utils.face_processing import align_face_inplace, graft_upper_body_inplace
-from utils.render_conf import draw_pose
+from utils.render_conf_confaware import draw_pose
 from utils.interpolate_xy import interpolate_xy
 
 from inference_part import (
@@ -104,16 +105,19 @@ def inference(
 
     accumulated_sequences: Dict[str, List[np.ndarray]] = {}
     accumulated_keypoints: Dict[str, List[np.ndarray]] = {}
+    accumulated_keypoints_with_conf: Dict[str, List[np.ndarray]] = {}
     accumulated_subsets: Dict[str, List[np.ndarray]] = {}
+    filename_order: List[str] = []
 
     with open(config['data']['ref_img_pose_im'], 'rb') as fp:
         ref_pixels = pickle.load(fp)
 
-    for sample_index in range(len(dataset)):
+    for sample_index in tqdm(range(len(dataset)), desc="Samples", unit="clip"):
         masked_sequence, input_mask, _, meta_info = dataset[sample_index]
         filename = meta_info.get("filename", f"sample_{sample_index}")
         norm_params = meta_info.get("norm_params")
         subset_list = meta_info.get("subset")
+        confidence_sequence = meta_info.get("confidence")
 
         parts = list(masked_sequence.keys())
         if not set(parts).issubset(PART_TO_GLOBAL_INDICES.keys()):
@@ -124,7 +128,7 @@ def inference(
             part: tensor.unsqueeze(0).to(device) for part, tensor in masked_sequence.items()
         }
         mask_on_device = {
-            part: input_mask[part].unsqueeze(0).to(device) for part in masked_sequence
+            part: input_mask[part].unsqueeze(0).to(device) for part in masked_sequence 
         }
 
         with torch.no_grad():
@@ -150,62 +154,129 @@ def inference(
         if norm_params is not None:
             reconstructed_full = denormalize_keypoints(reconstructed_full, norm_params)
 
-        # align_face_inplace(reconstructed_full)
-        # graft_upper_body_inplace(reconstructed_full)
+        confidence_full = None
+        if confidence_sequence is not None:
+            confidence_full = np.asarray(confidence_sequence, dtype=np.float32)
+            if confidence_full.ndim == 3 and confidence_full.shape[-1] == 1:
+                confidence_full = confidence_full[..., 0]
+            if confidence_full.shape[0] != reconstructed_full.shape[0] or confidence_full.shape[1] != reconstructed_full.shape[1]:
+                confidence_full = None
+        if confidence_full is None:
+            confidence_full = np.ones(
+                (reconstructed_full.shape[0], reconstructed_full.shape[1]),
+                dtype=np.float32,
+            )
+
+        reconstructed_with_conf = np.concatenate(
+            [reconstructed_full, confidence_full[..., np.newaxis]],
+            axis=-1,
+        )
 
         subset = to_numpy_subset(subset_list, reconstructed_full.shape[0])
 
-        frames = sequence_to_frames_mm(reconstructed_full, subset, ref_pixels.shape[1], ref_pixels.shape[2])
-        accumulated_sequences.setdefault(filename, []).append(frames)
-        accumulated_keypoints.setdefault(filename, []).append(reconstructed_full)
-        accumulated_subsets.setdefault(filename, []).append(subset)
+        frames = sequence_to_frames_mm(
+            reconstructed_with_conf,
+            subset,
+            ref_pixels.shape[1],
+            ref_pixels.shape[2],
+        )
 
-    os.makedirs("output/bridge/chatsign_50k_bridge", exist_ok=True)
-    for filename, frame_chunks in accumulated_sequences.items():
+        if filename not in accumulated_sequences:
+            accumulated_sequences[filename] = []
+            accumulated_keypoints[filename] = []
+            accumulated_keypoints_with_conf[filename] = []
+            accumulated_subsets[filename] = []
+            filename_order.append(filename)
+
+        accumulated_sequences[filename].append(frames)
+        accumulated_keypoints[filename].append(reconstructed_full)
+        accumulated_keypoints_with_conf[filename].append(reconstructed_with_conf)
+        accumulated_subsets[filename].append(subset)
+
+    os.makedirs("output/bridge/how2sign_200", exist_ok=True)
+    file_entries: List[Dict[str, np.ndarray]] = []
+    for filename in tqdm(filename_order, desc="Aggregating clips", unit="file"):
+        frame_chunks = accumulated_sequences[filename]
+        keypoint_chunks = accumulated_keypoints[filename]
+        keypoints_conf_chunks = accumulated_keypoints_with_conf[filename]
+        subset_chunks = accumulated_subsets[filename]
+
         video_poses = np.concatenate(frame_chunks, axis=0)
-        chunk_keypoints = accumulated_keypoints[filename]
-        chunk_subsets = accumulated_subsets[filename]
+        # keypoints_xy_full = np.concatenate(keypoint_chunks, axis=0)
+        # keypoints_with_conf_full = np.concatenate(keypoints_conf_chunks, axis=0)
+        subset_full = np.concatenate(subset_chunks, axis=0)
+
+        file_entries.append(
+            {
+                "name": filename,
+                "video_poses": video_poses,
+                # "keypoints_xy": keypoints_xy_full,
+                # "keypoints_with_conf": keypoints_with_conf_full,
+                "subset": subset_full,
+            }
+        )
+
+    # total_pose_pixels: List[torch.Tensor] = []
+
+    for file_idx, entry in enumerate(tqdm(file_entries, desc="Exporting outputs", unit="file")):
+        filename = entry["name"]
+        video_poses = entry["video_poses"]
         pose_pixels = np.concatenate([np.expand_dims(ref_pixels, axis=0), video_poses], axis=0)
         pose_pixels = torch.from_numpy(pose_pixels.copy()) / 127.5 - 1
         export_dict = {'pose_pixels': pose_pixels}
 
         transition_frames_np: Optional[np.ndarray] = None
-        if interp_frames > 0 and len(chunk_keypoints) > 1:
-            transition_sequences: List[np.ndarray] = []
-            transition_subsets: List[np.ndarray] = []
-            per_pair_steps = interp_frames + 2
-            for chunk_idx in range(len(chunk_keypoints) - 1):
-                start_pose = chunk_keypoints[chunk_idx][-1]
-                end_pose = chunk_keypoints[chunk_idx + 1][0]
-                interpolated = interpolate_xy(
-                    start_pose,
-                    end_pose,
-                    num_steps=per_pair_steps,
-                    drop_endpoints=True,
-                )
-                if interpolated.size == 0:
-                    continue
-                subset_template = chunk_subsets[chunk_idx][-1]
-                repeated_subset = np.repeat(subset_template[np.newaxis, ...], interpolated.shape[0], axis=0)
-                transition_sequences.append(interpolated)
-                transition_subsets.append(repeated_subset)
+        # if interp_frames > 0 and file_idx < len(file_entries) - 1:
+        #     next_entry = file_entries[file_idx + 1]
+        #     per_pair_steps = interp_frames + 2
 
-            if transition_sequences:
-                transition_keypoints = np.concatenate(transition_sequences, axis=0)
-                transition_subset = np.concatenate(transition_subsets, axis=0)
-                transition_frames_np = sequence_to_frames_mm(
-                    transition_keypoints,
-                    transition_subset,
-                    ref_pixels.shape[1],
-                    ref_pixels.shape[2],
-                )
-                pose_pixels_interp = torch.from_numpy(transition_frames_np.copy()) / 127.5 - 1
-                export_dict['pose_pixels_interpolation'] = pose_pixels_interp
+        #     start_pose_xy = entry["keypoints_xy"][-1]
+        #     end_pose_xy = next_entry["keypoints_xy"][0]
+        #     interpolated = interpolate_xy(
+        #         start_pose_xy,
+        #         end_pose_xy,
+        #         num_steps=per_pair_steps,
+        #         drop_endpoints=True,
+        #     )
 
-        output_path = Path("output/bridge/chatsign_50k_bridge") / filename
+        #     if interpolated.size > 0:
+        #         start_conf = entry["keypoints_with_conf"][-1, :, 2]
+        #         end_conf = next_entry["keypoints_with_conf"][0, :, 2]
+        #         alphas = np.linspace(0.0, 1.0, per_pair_steps, dtype=np.float32)[1:-1]
+        #         conf_interp = (
+        #             (1.0 - alphas[:, None]) * start_conf[None, :]
+        #             + alphas[:, None] * end_conf[None, :]
+        #         )
+        #         interpolated_with_conf = np.concatenate(
+        #             [interpolated, conf_interp[..., np.newaxis]],
+        #             axis=-1,
+        #         )
+
+        #         subset_template = entry["subset"][-1]
+        #         repeated_subset = np.repeat(
+        #             subset_template[np.newaxis, ...],
+        #             interpolated_with_conf.shape[0],
+        #             axis=0,
+        #         )
+        #         transition_frames_np = sequence_to_frames_mm(
+        #             interpolated_with_conf,
+        #             repeated_subset,
+        #             ref_pixels.shape[1],
+        #             ref_pixels.shape[2],
+        #         )
+        #         pose_pixels_interp = torch.from_numpy(transition_frames_np.copy()) / 127.5 - 1
+        #         pose_pixels = torch.cat([pose_pixels, pose_pixels_interp], dim=0)
+        #         export_dict['pose_pixels'] = pose_pixels
+
+        output_path = Path("output/bridge/how2sign_200") / filename
         with open(output_path, 'wb') as fp:
             pickle.dump(export_dict, fp)
         print(f"[{filename}] saved {pose_pixels.shape[0]} frames to {output_path}, shape = {export_dict['pose_pixels'].shape}")
+
+        # if file_idx == 0:
+        #     total_pose_pixels.append(pose_pixels)
+        # else:
+        #     total_pose_pixels.append(pose_pixels[1:])
 
         video_filename = Path(filename).with_suffix(".mp4").name
         video_output_path = Path(output_dir) / video_filename
@@ -218,17 +289,23 @@ def inference(
         )
         print(f"[{filename}] exported video to {video_output_path}")
 
-        if transition_frames_np is not None:
-            interp_fps = 3
-            interp_video_path = Path(output_dir) / f"{Path(video_filename).stem}_interp.mp4"
-            export_video_from_frames(
-                transition_frames_np,
-                interp_video_path,
-                fps=interp_fps,
-                height=height,
-                width=width,
-            )
-            print(f"[{filename}] exported interpolation video to {interp_video_path} (fps={interp_fps})")
+        # if transition_frames_np is not None:
+        #     interp_video_path = Path(output_dir) / f"{Path(video_filename).stem}_interp.mp4"
+        #     export_video_from_frames(
+        #         transition_frames_np,
+        #         interp_video_path,
+        #         fps=fps,
+        #         height=height,
+        #         width=width,
+        #     )
+        #     print(f"[{filename}] exported interpolation video to {interp_video_path}")
+
+    # if total_pose_pixels:
+    #     total_path = Path("output/bridge/how2sign_200") / "total.pkl"
+    #     concatenated = torch.cat(total_pose_pixels, dim=0)
+    #     with open(total_path, 'wb') as fp:
+    #         pickle.dump({'pose_pixels': concatenated}, fp)
+    #     print(f"[total.pkl] saved concatenated pose_pixels with shape {concatenated.shape} to {total_path}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -239,7 +316,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="output/video/mm_full",
+        default="output/video/how2sign_200",
         help="Directory to store merged videos.",
     )
     parser.add_argument(
@@ -250,7 +327,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--height", type=int, default=1080, help="Output video height.")
     parser.add_argument("--width", type=int, default=1080, help="Output video width.")
-    parser.add_argument("--fps", type=int, default=30, help="Output video frames per second.")
+    parser.add_argument("--fps", type=int, default=5, help="Output video frames per second.")
     parser.add_argument("--seed", type=int, default=0, help="Random seed for reproducibility.")
     parser.add_argument(
         "--interp-frames",

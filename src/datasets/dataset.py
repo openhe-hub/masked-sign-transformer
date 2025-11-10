@@ -33,9 +33,9 @@ class PoseDataset(Dataset):
         准备样本，并为每个视频动态计算其采样步长，确保数据匹配。
         """
         print("Preparing samples with dynamic stride calculation...")
-        if self.limit > 0  and self.limit <= len(self.pkl_files): 
-            self.pkl_files = self.pkl_files[:self.limit]
-        for file_name in tqdm(self.pkl_files, desc="Processing pkl files"):
+        # if self.limit > 0  and self.limit <= len(self.pkl_files): 
+            # self.pkl_files = self.pkl_files[:self.limit]
+        for file_name in tqdm(self.pkl_files[100:], desc="Processing pkl files"):
             # video_name = file_name.replace('_kps.pkl', '.mp4')
             # video_file_path = os.path.join(self.video_path, video_name)
 

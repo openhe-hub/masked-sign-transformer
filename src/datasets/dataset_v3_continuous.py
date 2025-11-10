@@ -56,7 +56,7 @@ class PoseDatasetV3Continuous(Dataset):
             # last_possible_start = num_frames - self.sequence_length
             # if not start_indices or start_indices[-1] != last_possible_start:
             #     start_indices.append(last_possible_start)
-            print(f"{file_name}, {start_indices}")
+            # print(f"{file_name}, {start_indices}")
 
             for start in start_indices:
                 sequence_dicts = data[start : start + self.sequence_length]
@@ -67,12 +67,14 @@ class PoseDatasetV3Continuous(Dataset):
                     "left": keypoints_sequence[:, 107:128, :],
                     "right": keypoints_sequence[:, 86:107, :],
                 }
+                confidence_sequence = keypoints_sequence[:, :, 2].astype(np.float32, copy=True)
 
                 meta_info = {
                     "filename": file_name,
                     "norm_params": [item["norm_params"] for item in sequence_dicts],
                     "subset": [item["subset"] for item in sequence_dicts],
                     "face_keypoints": [item["keypoints"][18:86] for item in sequence_dicts],
+                    "confidence": confidence_sequence,
                 }
 
                 self.samples.append((keypoints_sequence_part, meta_info))

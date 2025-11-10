@@ -3,8 +3,8 @@ import os
 import numpy as np
 
 # params
-input_folder = 'data/stage1'
-output_folder = 'data/stage1'
+input_folder = 'data/how2sign_200'
+output_folder = 'data/how2sign_200'
 
 def handle_one_frame(data):
     if data['hands'].shape[0] > 2 or data['hands_score'].shape[0] > 2: return None
