@@ -33,7 +33,7 @@ class PoseDatasetV3Continuous(Dataset):
 
         self.pkl_files = [f for f in os.listdir(self.data_path) if f.endswith(".pkl")]
         if 0 < self.limit <= len(self.pkl_files):
-            self.pkl_files = self.pkl_files[: self.limit]
+            self.pkl_files = self.pkl_files[0: self.limit]
 
         self.parts: List[str] = list(PART_KP_INDICES.keys())
         self.part_kps: Dict[str, int] = {part: len(indices) for part, indices in PART_KP_INDICES.items()}

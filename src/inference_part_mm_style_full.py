@@ -193,7 +193,7 @@ def inference(
         accumulated_keypoints_with_conf[filename].append(reconstructed_with_conf)
         accumulated_subsets[filename].append(subset)
 
-    os.makedirs("output/bridge/how2sign_200", exist_ok=True)
+    os.makedirs("output/bridge/phoenix", exist_ok=True)
     file_entries: List[Dict[str, np.ndarray]] = []
     for filename in tqdm(filename_order, desc="Aggregating clips", unit="file"):
         frame_chunks = accumulated_sequences[filename]
@@ -268,7 +268,7 @@ def inference(
         #         pose_pixels = torch.cat([pose_pixels, pose_pixels_interp], dim=0)
         #         export_dict['pose_pixels'] = pose_pixels
 
-        output_path = Path("output/bridge/how2sign_200") / filename
+        output_path = Path("output/bridge/phoenix") / filename
         with open(output_path, 'wb') as fp:
             pickle.dump(export_dict, fp)
         print(f"[{filename}] saved {pose_pixels.shape[0]} frames to {output_path}, shape = {export_dict['pose_pixels'].shape}")
@@ -301,7 +301,7 @@ def inference(
         #     print(f"[{filename}] exported interpolation video to {interp_video_path}")
 
     # if total_pose_pixels:
-    #     total_path = Path("output/bridge/how2sign_200") / "total.pkl"
+    #     total_path = Path("output/bridge/phoenix") / "total.pkl"
     #     concatenated = torch.cat(total_pose_pixels, dim=0)
     #     with open(total_path, 'wb') as fp:
     #         pickle.dump({'pose_pixels': concatenated}, fp)
@@ -316,7 +316,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="output/video/how2sign_200",
+        default="output/video/phoenix",
         help="Directory to store merged videos.",
     )
     parser.add_argument(

@@ -26,7 +26,7 @@ def split_pkls(src_dir: Path, parts: int, mode: str) -> None:
 if __name__ == "__main__":
         parser = argparse.ArgumentParser(
             description="Split .pkl files into equal parts.")
-        parser.add_argument("--src-dir", default="output/bridge/how2sign_200",
+        parser.add_argument("--src-dir", default="output/bridge/phoenix",
                             type=Path, help="Directory with .pkl files.")
         parser.add_argument("--parts", default=10, type=int,
                             help="How many splits to create.")

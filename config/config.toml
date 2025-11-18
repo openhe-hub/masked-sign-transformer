@@ -1,7 +1,7 @@
 # Pose Transformer Project Configuration
 
 [data]
-data_dir = "./data/how2sign_200_norm"          # pkl数据目录 (路径相对于项目根目录)
+data_dir = "./data/phoenix_norm"          # pkl数据目录 (路径相对于项目根目录)
 video_dir = "./data/chatsign_200_videos"
 ref_img_path = "./assets/img/test2.jpg"
 ref_img_pose = "./assets/pose/ref.pkl"
