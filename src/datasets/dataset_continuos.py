@@ -5,6 +5,7 @@ import os
 import pickle
 import cv2
 from config_loader import config
+from utils.pickle_compat import load_pickle
 
 class PoseDatasetContinuos(Dataset):
     def __init__(self):
@@ -42,7 +43,7 @@ class PoseDatasetContinuos(Dataset):
             # 加载 pkl 数据以获取其长度
             file_path = os.path.join(self.data_path, file_name)
             with open(file_path, 'rb') as f:
-                data = pickle.load(f)
+                data = load_pickle(f)
             pkl_frame_count = len(data)
 
             # 打开视频，获取其帧数和FPS

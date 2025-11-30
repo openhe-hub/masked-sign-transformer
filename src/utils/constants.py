@@ -20,6 +20,19 @@ PART_KP_INDICES = {
     'right': list(range(112, 133)), # Right hand (21 kps)
 }
 
+# Optional extended part indices used by bridge models/datasets.
+FACE_KP_INDICES = list(range(18, 86))
+
+
+def get_part_kp_indices(include_face: bool = False):
+    """
+    Returns a copy of the PART_KP_INDICES dict, optionally extending it with face indices.
+    """
+    part_indices = dict(PART_KP_INDICES)
+    if include_face and 'face' not in part_indices:
+        part_indices['face'] = FACE_KP_INDICES
+    return part_indices
+
 # Verify that the indices are correct and do not overlap if they shouldn't.
 # This is a basic sanity check.
 all_indices = []
@@ -27,4 +40,3 @@ for part, indices in PART_KP_INDICES.items():
     all_indices.extend(indices)
 if len(all_indices) != len(set(all_indices)):
     print("Warning: Overlapping keypoint indices between parts.")
-

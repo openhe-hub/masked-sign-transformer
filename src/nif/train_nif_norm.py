@@ -9,6 +9,8 @@ import glob
 import random
 from scipy.spatial import procrustes
 
+from utils.pickle_compat import load_pickle
+
 # --- 1. 数据加载 & 预处理模块 (核心修改) ---
 
 def load_all_sequences(data_dir):
@@ -16,13 +18,17 @@ def load_all_sequences(data_dir):
     video_files = sorted(glob.glob(os.path.join(data_dir, '*_kps.pkl')))
     if not video_files: raise FileNotFoundError(f"在目录 {data_dir} 中没有找到任何 '_kps.pkl' 文件。")
     print(f"找到了 {len(video_files)} 个视频文件。")
-    all_sequences = [[frame['keypoints'][18:86, :2] for frame in pickle.load(open(video_path, 'rb'))] for video_path in video_files]
+    all_sequences = []
+    for video_path in video_files:
+        with open(video_path, 'rb') as fp:
+            frames = load_pickle(fp)
+        all_sequences.append([frame['keypoints'][18:86, :2] for frame in frames])
     return [np.array(seq) for seq in all_sequences]
 
 def load_ref_kpts(ref_path):
     # ... (此函数无变化) ...
     with open(ref_path, 'rb') as fp:
-        ref_data = pickle.load(fp)
+        ref_data = load_pickle(fp)
     return ref_data['keypoints'][18:86, :2]
 
 # --- NEW: Scale normalization function ---

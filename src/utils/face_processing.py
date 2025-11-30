@@ -7,6 +7,7 @@ import numpy as np
 
 from config_loader import config
 from utils.post_process import post_process_align_naive
+from utils.pickle_compat import load_pickle
 
 NECK_ID = 1
 R_SHOULDER_ID = 2
@@ -35,7 +36,7 @@ def _load_reference_pose_xy() -> Optional[np.ndarray]:
         return None
 
     with open(ref_path, "rb") as f:
-        data = pickle.load(f)
+        data = load_pickle(f)
     
     # import ipdb; ipdb.set_trace()
 

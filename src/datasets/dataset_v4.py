@@ -4,6 +4,7 @@ import numpy as np
 import os
 import pickle
 from config_loader import config
+from utils.pickle_compat import load_pickle
 
 # ✨ 1. 定义我们唯一关心的关键点索引
 # 共 7 (上半身) + 21 (左手) + 21 (右手) = 49 个点
@@ -50,7 +51,7 @@ class PoseDatasetV4(Dataset):
         for file_name in files_to_process:
             file_path = os.path.join(self.data_path, file_name)
             with open(file_path, 'rb') as f:
-                data_dict = pickle.load(f)
+                data_dict = load_pickle(f)
 
             # 加载完整数据
             keypoints_full = np.squeeze(data_dict['keypoints'])

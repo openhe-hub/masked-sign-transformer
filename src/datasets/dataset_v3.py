@@ -5,6 +5,7 @@ import os
 import pickle
 from config_loader import config
 from utils.constants import PART_KP_INDICES
+from utils.pickle_compat import load_pickle
 from tqdm import tqdm
 
 class PoseDatasetV3(Dataset):
@@ -36,7 +37,7 @@ class PoseDatasetV3(Dataset):
         for file_name in tqdm(self.pkl_files):
             file_path = os.path.join(self.data_path, file_name)
             with open(file_path, 'rb') as f:
-                data = pickle.load(f)
+                data = load_pickle(f)
             
             num_frames = len(data)
             

@@ -2,9 +2,9 @@ import torch
 from torch.utils.data import Dataset
 import numpy as np
 import os
-import pickle
 from config_loader import config
 from utils.constants import PART_KP_INDICES
+from utils.pickle_compat import load_pickle
 
 class PoseDatasetV5(Dataset):
     """
@@ -39,7 +39,7 @@ class PoseDatasetV5(Dataset):
         for file_name in files_to_process:
             file_path = os.path.join(self.data_path, file_name)
             with open(file_path, 'rb') as f:
-                data_dict = pickle.load(f)
+                data_dict = load_pickle(f)
 
             # Ensure all required parts are present
             if not all(part in data_dict for part in self.parts):

@@ -9,7 +9,7 @@ ref_img_pose_im = "./assets/pose/test2.pkl"
 sequence_length = 16          # 输入序列的长度（看过去多少帧）
 n_kps = 69                   # 每帧的关键点数量
 features_per_kp = 3           # 每个关键点的特征数 (x, y) # confidence
-limit = 10
+limit = 200
 
 [model]
 version = "v3"                # Model version to use
@@ -48,7 +48,7 @@ experiment = "v5-mid-cosign"
 device = "auto" # "cuda", "cpu", "auto"
 batch_size = 32
 learning_rate = 1e-4
-num_epochs = 500
+num_epochs = 100
 weight_decay = 0.01
 gradient_accumulation_steps = 4
 
@@ -62,7 +62,9 @@ total_mask_ratio = 0.20      # (For V3 Model) 掩码总比例
 spatial_mask_ratio = 0.15     # 空间（关键点）掩码比例
 temporal_mask_ratio = 0.05    # 时间（帧）掩码比例
 confidence_threshold = 0.3
-gap_length = 4               # Bridge-mask 连续帧长度
+pre_context_length = 5        # 桥段左侧可见长度
+post_context_length = 5       # 桥段右侧可见长度
+gap_length = 6               # Bridge-mask 连续帧长度
 
 [loss_weights]
 # 这些是超参数，需要仔细调整。建议从一个较小的值开始。
