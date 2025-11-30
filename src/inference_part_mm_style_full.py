@@ -193,7 +193,7 @@ def inference(
         accumulated_keypoints_with_conf[filename].append(reconstructed_with_conf)
         accumulated_subsets[filename].append(subset)
 
-    os.makedirs("output/bridge/phoenix", exist_ok=True)
+    os.makedirs("output/bridge/test_interpolate", exist_ok=True)
     file_entries: List[Dict[str, np.ndarray]] = []
     for filename in tqdm(filename_order, desc="Aggregating clips", unit="file"):
         frame_chunks = accumulated_sequences[filename]
@@ -202,21 +202,21 @@ def inference(
         subset_chunks = accumulated_subsets[filename]
 
         video_poses = np.concatenate(frame_chunks, axis=0)
-        # keypoints_xy_full = np.concatenate(keypoint_chunks, axis=0)
-        # keypoints_with_conf_full = np.concatenate(keypoints_conf_chunks, axis=0)
+        keypoints_xy_full = np.concatenate(keypoint_chunks, axis=0)
+        keypoints_with_conf_full = np.concatenate(keypoints_conf_chunks, axis=0)
         subset_full = np.concatenate(subset_chunks, axis=0)
 
         file_entries.append(
             {
                 "name": filename,
                 "video_poses": video_poses,
-                # "keypoints_xy": keypoints_xy_full,
-                # "keypoints_with_conf": keypoints_with_conf_full,
+                "keypoints_xy": keypoints_xy_full,
+                "keypoints_with_conf": keypoints_with_conf_full,
                 "subset": subset_full,
             }
         )
 
-    # total_pose_pixels: List[torch.Tensor] = []
+    total_pose_pixels: List[torch.Tensor] = []
 
     for file_idx, entry in enumerate(tqdm(file_entries, desc="Exporting outputs", unit="file")):
         filename = entry["name"]
@@ -226,57 +226,57 @@ def inference(
         export_dict = {'pose_pixels': pose_pixels}
 
         transition_frames_np: Optional[np.ndarray] = None
-        # if interp_frames > 0 and file_idx < len(file_entries) - 1:
-        #     next_entry = file_entries[file_idx + 1]
-        #     per_pair_steps = interp_frames + 2
+        if interp_frames > 0 and file_idx < len(file_entries) - 1:
+            next_entry = file_entries[file_idx + 1]
+            per_pair_steps = interp_frames + 2
 
-        #     start_pose_xy = entry["keypoints_xy"][-1]
-        #     end_pose_xy = next_entry["keypoints_xy"][0]
-        #     interpolated = interpolate_xy(
-        #         start_pose_xy,
-        #         end_pose_xy,
-        #         num_steps=per_pair_steps,
-        #         drop_endpoints=True,
-        #     )
+            start_pose_xy = entry["keypoints_xy"][-1]
+            end_pose_xy = next_entry["keypoints_xy"][0]
+            interpolated = interpolate_xy(
+                start_pose_xy,
+                end_pose_xy,
+                num_steps=per_pair_steps,
+                drop_endpoints=True,
+            )
 
-        #     if interpolated.size > 0:
-        #         start_conf = entry["keypoints_with_conf"][-1, :, 2]
-        #         end_conf = next_entry["keypoints_with_conf"][0, :, 2]
-        #         alphas = np.linspace(0.0, 1.0, per_pair_steps, dtype=np.float32)[1:-1]
-        #         conf_interp = (
-        #             (1.0 - alphas[:, None]) * start_conf[None, :]
-        #             + alphas[:, None] * end_conf[None, :]
-        #         )
-        #         interpolated_with_conf = np.concatenate(
-        #             [interpolated, conf_interp[..., np.newaxis]],
-        #             axis=-1,
-        #         )
+            if interpolated.size > 0:
+                start_conf = entry["keypoints_with_conf"][-1, :, 2]
+                end_conf = next_entry["keypoints_with_conf"][0, :, 2]
+                alphas = np.linspace(0.0, 1.0, per_pair_steps, dtype=np.float32)[1:-1]
+                conf_interp = (
+                    (1.0 - alphas[:, None]) * start_conf[None, :]
+                    + alphas[:, None] * end_conf[None, :]
+                )
+                interpolated_with_conf = np.concatenate(
+                    [interpolated, conf_interp[..., np.newaxis]],
+                    axis=-1,
+                )
 
-        #         subset_template = entry["subset"][-1]
-        #         repeated_subset = np.repeat(
-        #             subset_template[np.newaxis, ...],
-        #             interpolated_with_conf.shape[0],
-        #             axis=0,
-        #         )
-        #         transition_frames_np = sequence_to_frames_mm(
-        #             interpolated_with_conf,
-        #             repeated_subset,
-        #             ref_pixels.shape[1],
-        #             ref_pixels.shape[2],
-        #         )
-        #         pose_pixels_interp = torch.from_numpy(transition_frames_np.copy()) / 127.5 - 1
-        #         pose_pixels = torch.cat([pose_pixels, pose_pixels_interp], dim=0)
-        #         export_dict['pose_pixels'] = pose_pixels
+                subset_template = entry["subset"][-1]
+                repeated_subset = np.repeat(
+                    subset_template[np.newaxis, ...],
+                    interpolated_with_conf.shape[0],
+                    axis=0,
+                )
+                transition_frames_np = sequence_to_frames_mm(
+                    interpolated_with_conf,
+                    repeated_subset,
+                    ref_pixels.shape[1],
+                    ref_pixels.shape[2],
+                )
+                pose_pixels_interp = torch.from_numpy(transition_frames_np.copy()) / 127.5 - 1
+                pose_pixels = torch.cat([pose_pixels, pose_pixels_interp], dim=0)
+                export_dict['pose_pixels'] = pose_pixels
 
-        output_path = Path("output/bridge/phoenix") / filename
+        output_path = Path("output/bridge/test_interpolate") / filename
         with open(output_path, 'wb') as fp:
             pickle.dump(export_dict, fp)
         print(f"[{filename}] saved {pose_pixels.shape[0]} frames to {output_path}, shape = {export_dict['pose_pixels'].shape}")
 
-        # if file_idx == 0:
-        #     total_pose_pixels.append(pose_pixels)
-        # else:
-        #     total_pose_pixels.append(pose_pixels[1:])
+        if file_idx == 0:
+            total_pose_pixels.append(pose_pixels)
+        else:
+            total_pose_pixels.append(pose_pixels[1:])
 
         video_filename = Path(filename).with_suffix(".mp4").name
         video_output_path = Path(output_dir) / video_filename
@@ -289,23 +289,23 @@ def inference(
         )
         print(f"[{filename}] exported video to {video_output_path}")
 
-        # if transition_frames_np is not None:
-        #     interp_video_path = Path(output_dir) / f"{Path(video_filename).stem}_interp.mp4"
-        #     export_video_from_frames(
-        #         transition_frames_np,
-        #         interp_video_path,
-        #         fps=fps,
-        #         height=height,
-        #         width=width,
-        #     )
-        #     print(f"[{filename}] exported interpolation video to {interp_video_path}")
+        if transition_frames_np is not None:
+            interp_video_path = Path(output_dir) / f"{Path(video_filename).stem}_interp.mp4"
+            export_video_from_frames(
+                transition_frames_np,
+                interp_video_path,
+                fps=fps,
+                height=height,
+                width=width,
+            )
+            print(f"[{filename}] exported interpolation video to {interp_video_path}")
 
-    # if total_pose_pixels:
-    #     total_path = Path("output/bridge/phoenix") / "total.pkl"
-    #     concatenated = torch.cat(total_pose_pixels, dim=0)
-    #     with open(total_path, 'wb') as fp:
-    #         pickle.dump({'pose_pixels': concatenated}, fp)
-    #     print(f"[total.pkl] saved concatenated pose_pixels with shape {concatenated.shape} to {total_path}")
+    if total_pose_pixels:
+        total_path = Path("output/bridge/test_interpolate") / "total_20.pkl"
+        concatenated = torch.cat(total_pose_pixels, dim=0)
+        with open(total_path, 'wb') as fp:
+            pickle.dump({'pose_pixels': concatenated}, fp)
+        print(f"[total.pkl] saved concatenated pose_pixels with shape {concatenated.shape} to {total_path}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -316,7 +316,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="output/video/phoenix",
+        default="output/video/test_interpolate",
         help="Directory to store merged videos.",
     )
     parser.add_argument(
@@ -332,7 +332,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--interp-frames",
         type=int,
-        default=0,
+        default=20,
         help="Number of in-between frames to synthesize per pair using XY interpolation.",
     )
     args = parser.parse_args()
