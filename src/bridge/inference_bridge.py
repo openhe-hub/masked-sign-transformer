@@ -1,5 +1,6 @@
 import argparse
 import os
+import sys
 from pathlib import Path
 from typing import Dict, List
 
@@ -7,10 +8,14 @@ import cv2
 import numpy as np
 import torch
 
+ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
+if ROOT_DIR not in sys.path:
+    sys.path.append(ROOT_DIR)
+
 from config_loader import config
 from datasets.dataset_v6_bridge import PoseBridgeDatasetV6, PART_SLICE_FALLBACK
 from models.model_v6_bridge import PoseBridgeTransformerV6
-from utils.render import draw_pose
+from utils.render_conf_confaware import draw_pose
 from inference_part import create_subset_placeholder, denormalize_keypoints
 
 
@@ -32,17 +37,21 @@ def assemble_full_sequence(part_dict: Dict[str, np.ndarray]) -> np.ndarray:
 
 
 def subset_to_array(subset_list, seq_len: int) -> np.ndarray:
+    placeholder = create_subset_placeholder(seq_len)
     if not subset_list or len(subset_list) != seq_len:
-        return create_subset_placeholder(seq_len)
+        return placeholder
     frames = []
-    for subset in subset_list:
+    for idx, subset in enumerate(subset_list):
         if subset is None:
-            frames.append(create_subset_placeholder(1)[0])
+            frames.append(placeholder[idx])
             continue
         arr = np.asarray(subset)
         if arr.ndim == 1:
             arr = arr[None, :]
-        frames.append(arr)
+        frame_subset = placeholder[idx].copy()
+        cols = min(frame_subset.shape[-1], arr.shape[-1])
+        frame_subset[:, :cols] = arr[:, :cols]
+        frames.append(frame_subset)
     return np.stack(frames, axis=0)
 
 
@@ -79,7 +88,13 @@ def render_sequences(
             gap_mask_frame = None
             if idx in highlight_indices and gap_start <= t < gap_end:
                 gap_mask_frame = np.ones(seq.shape[1], dtype=bool)
-            pose_img = draw_pose(seq[t], subset[t], canvas_size, canvas_size, mask=gap_mask_frame)
+            pose_img = draw_pose(
+                seq[t],
+                subset[t],
+                canvas_size,
+                canvas_size,
+                highlight_mask=gap_mask_frame,
+            )
             frame = pose_img.transpose(1, 2, 0)
             frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
             cv2.putText(frame, titles[idx], (30, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.8, (0, 0, 0), 3, cv2.LINE_AA)
@@ -139,24 +154,23 @@ def inference(
         full_target_parts = {k: np.concatenate([pre_np[k], gap_np[k], post_np[k]], axis=0) for k in pre_np}
         full_pred_parts = {k: np.concatenate([pre_np[k], pred_parts[k], post_np[k]], axis=0) for k in pre_np}
 
-        target_full = assemble_full_sequence(full_target_parts)
-        pred_full = assemble_full_sequence(full_pred_parts)
+        target_seq = assemble_full_sequence(full_target_parts)
+        pred_seq = assemble_full_sequence(full_pred_parts)
 
         norm_params = meta_info.get('norm_params') if meta_info else None
-        if norm_params is not None and len(norm_params) == target_full.shape[0]:
-            target_xy = denormalize_keypoints(target_full[..., :2], norm_params)
-            pred_xy = denormalize_keypoints(pred_full[..., :2], norm_params)
-        else:
-            target_xy = target_full[..., :2]
-            pred_xy = pred_full[..., :2]
+        if norm_params is not None and len(norm_params) == target_seq.shape[0]:
+            target_xy = denormalize_keypoints(target_seq[..., :2], norm_params)
+            pred_xy = denormalize_keypoints(pred_seq[..., :2], norm_params)
+            target_seq[..., :2] = target_xy
+            pred_seq[..., :2] = pred_xy
 
         subset_seq = meta_info.get('subset') if meta_info else None
-        subset_array = subset_to_array(subset_seq, target_xy.shape[0])
+        subset_array = subset_to_array(subset_seq, target_seq.shape[0])
 
         sample_name = f"sample_{sample_idx:05d}"
         output_path = Path(output_dir) / f"{sample_name}.mp4"
         render_sequences(
-            sequences=[target_xy, pred_xy],
+            sequences=[target_seq, pred_seq],
             titles=["Ground Truth", "Predicted"],
             output_path=output_path,
             fps=fps,

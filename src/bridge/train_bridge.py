@@ -1,5 +1,6 @@
 import argparse
 import os
+import sys
 
 import torch
 import torch.nn as nn
@@ -7,6 +8,10 @@ import torch.nn.functional as F
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+
+ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
+if ROOT_DIR not in sys.path:
+    sys.path.append(ROOT_DIR)
 
 from config_loader import config
 from datasets.dataset_v6_bridge import PoseBridgeDatasetV6
