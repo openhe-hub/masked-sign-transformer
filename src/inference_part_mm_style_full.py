@@ -1,7 +1,7 @@
 import argparse
 import os
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -75,6 +75,151 @@ def to_numpy_subset(subset_list: Optional[Iterable[np.ndarray]], seq_len: int) -
         stacked = np.stack([np.asarray(item) for item in subset_list], axis=0)
         return stacked
     return create_subset_placeholder(seq_len)
+
+
+def compute_head_bbox_size(keypoints: np.ndarray) -> Tuple[float, float]:
+    """
+    Compute average head bounding box size across all frames.
+
+    Args:
+        keypoints: (num_frames, num_keypoints, 2) array
+
+    Returns:
+        (avg_width, avg_height) of head bbox
+    """
+    face_kpts = keypoints[:, 18:86, :]  # Face keypoints across all frames
+
+    widths = []
+    heights = []
+
+    for frame_idx in range(face_kpts.shape[0]):
+        kpts = face_kpts[frame_idx]
+
+        # Filter valid points
+        valid_mask = ~(np.isnan(kpts).any(axis=1) | (kpts == 0).all(axis=1))
+        if not valid_mask.any():
+            continue
+
+        valid_kpts = kpts[valid_mask]
+        x_min, y_min = valid_kpts.min(axis=0)
+        x_max, y_max = valid_kpts.max(axis=0)
+
+        widths.append(x_max - x_min)
+        heights.append(y_max - y_min)
+
+    if not widths:
+        return 0.0, 0.0
+
+    return float(np.mean(widths)), float(np.mean(heights))
+
+
+def normalize_head_size(
+    keypoints: np.ndarray,
+    target_width: float,
+    target_height: float,
+) -> np.ndarray:
+    """
+    Normalize head size to target dimensions for all frames.
+
+    Args:
+        keypoints: (num_frames, num_keypoints, 2) array
+        target_width: target head width
+        target_height: target head height
+
+    Returns:
+        Normalized keypoints with same shape
+    """
+    result = keypoints.copy()
+
+    for frame_idx in range(keypoints.shape[0]):
+        face_kpts = keypoints[frame_idx, 18:86, :]
+
+        # Filter valid points
+        valid_mask = ~(np.isnan(face_kpts).any(axis=1) | (face_kpts == 0).all(axis=1))
+        if not valid_mask.any():
+            continue
+
+        valid_kpts = face_kpts[valid_mask]
+
+        # Compute current bbox
+        x_min, y_min = valid_kpts.min(axis=0)
+        x_max, y_max = valid_kpts.max(axis=0)
+        current_width = x_max - x_min
+        current_height = y_max - y_min
+
+        if current_width == 0 or current_height == 0:
+            continue
+
+        # Compute center
+        center_x = (x_min + x_max) / 2
+        center_y = (y_min + y_max) / 2
+
+        # Compute scale factors
+        scale_x = target_width / current_width
+        scale_y = target_height / current_height
+
+        # Apply scaling to face keypoints (18:86)
+        face_kpts_frame = result[frame_idx, 18:86, :]
+        face_kpts_frame[:, 0] = center_x + (face_kpts_frame[:, 0] - center_x) * scale_x
+        face_kpts_frame[:, 1] = center_y + (face_kpts_frame[:, 1] - center_y) * scale_y
+        result[frame_idx, 18:86, :] = face_kpts_frame
+
+    return result
+
+
+def generate_interpolation_frames(
+    start_entry: Dict[str, np.ndarray],
+    end_entry: Dict[str, np.ndarray],
+    interp_frames: int,
+    ref_height: int,
+    ref_width: int,
+) -> Optional[np.ndarray]:
+    """Generate interpolation frames between two consecutive entries."""
+    if interp_frames <= 0:
+        return None
+
+    per_pair_steps = interp_frames + 2
+    start_pose_xy = start_entry["keypoints_xy"][-1]
+    end_pose_xy = end_entry["keypoints_xy"][0]
+
+    interpolated = interpolate_xy(
+        start_pose_xy,
+        end_pose_xy,
+        num_steps=per_pair_steps,
+        drop_endpoints=True,
+    )
+
+    if interpolated.size == 0:
+        return None
+
+    # Interpolate confidence values
+    start_conf = start_entry["keypoints_with_conf"][-1, :, 2]
+    end_conf = end_entry["keypoints_with_conf"][0, :, 2]
+    alphas = np.linspace(0.0, 1.0, per_pair_steps, dtype=np.float32)[1:-1]
+    conf_interp = (
+        (1.0 - alphas[:, None]) * start_conf[None, :]
+        + alphas[:, None] * end_conf[None, :]
+    )
+
+    interpolated_with_conf = np.concatenate(
+        [interpolated, conf_interp[..., np.newaxis]],
+        axis=-1,
+    )
+
+    # Repeat subset template
+    subset_template = start_entry["subset"][-1]
+    repeated_subset = np.repeat(
+        subset_template[np.newaxis, ...],
+        interpolated_with_conf.shape[0],
+        axis=0,
+    )
+
+    return sequence_to_frames_mm(
+        interpolated_with_conf,
+        repeated_subset,
+        ref_height,
+        ref_width,
+    )
 
 
 def inference(
@@ -217,68 +362,80 @@ def inference(
             }
         )
 
+    # Compute global target head size (median across all videos)
+    print("Computing global target head size...")
+    all_widths = []
+    all_heights = []
+    for entry in file_entries:
+        w, h = compute_head_bbox_size(entry["keypoints_xy"])
+        if w > 0 and h > 0:
+            all_widths.append(w)
+            all_heights.append(h)
+
+    if all_widths:
+        target_head_width = float(np.median(all_widths))
+        target_head_height = float(np.median(all_heights))
+        print(f"Target head size: width={target_head_width:.4f}, height={target_head_height:.4f}")
+
+        # Normalize head size for all entries
+        print("Normalizing head sizes...")
+        for entry in tqdm(file_entries, desc="Normalizing heads", unit="file"):
+            # Normalize keypoints_xy
+            entry["keypoints_xy"] = normalize_head_size(
+                entry["keypoints_xy"],
+                target_head_width,
+                target_head_height,
+            )
+
+            # Update keypoints_with_conf (preserve confidence values)
+            entry["keypoints_with_conf"][:, :, :2] = entry["keypoints_xy"]
+
+            # Re-render frames with normalized keypoints
+            entry["video_poses"] = sequence_to_frames_mm(
+                entry["keypoints_with_conf"],
+                entry["subset"],
+                ref_pixels.shape[1],
+                ref_pixels.shape[2],
+            )
+    else:
+        print("Warning: Could not compute global head size, skipping normalization")
+
     total_pose_pixels: List[torch.Tensor] = []
 
     for file_idx, entry in enumerate(tqdm(file_entries, desc="Exporting outputs", unit="file")):
-        filename = entry["name"]
+        filename = str(entry["name"])
         video_poses = entry["video_poses"]
         pose_pixels = np.concatenate([np.expand_dims(ref_pixels, axis=0), video_poses], axis=0)
         pose_pixels = torch.from_numpy(pose_pixels.copy()) / 127.5 - 1
-        export_dict = {'pose_pixels': pose_pixels}
 
-        transition_frames_np: Optional[np.ndarray] = None
-        if interp_frames > 0 and file_idx < len(file_entries) - 1:
+        # Generate interpolation frames if needed
+        transition_frames_np = None
+        if file_idx < len(file_entries) - 1:
             next_entry = file_entries[file_idx + 1]
-            per_pair_steps = interp_frames + 2
-
-            start_pose_xy = entry["keypoints_xy"][-1]
-            end_pose_xy = next_entry["keypoints_xy"][0]
-            interpolated = interpolate_xy(
-                start_pose_xy,
-                end_pose_xy,
-                num_steps=per_pair_steps,
-                drop_endpoints=True,
+            transition_frames_np = generate_interpolation_frames(
+                entry, next_entry, interp_frames, ref_pixels.shape[1], ref_pixels.shape[2]
             )
-
-            if interpolated.size > 0:
-                start_conf = entry["keypoints_with_conf"][-1, :, 2]
-                end_conf = next_entry["keypoints_with_conf"][0, :, 2]
-                alphas = np.linspace(0.0, 1.0, per_pair_steps, dtype=np.float32)[1:-1]
-                conf_interp = (
-                    (1.0 - alphas[:, None]) * start_conf[None, :]
-                    + alphas[:, None] * end_conf[None, :]
-                )
-                interpolated_with_conf = np.concatenate(
-                    [interpolated, conf_interp[..., np.newaxis]],
-                    axis=-1,
-                )
-
-                subset_template = entry["subset"][-1]
-                repeated_subset = np.repeat(
-                    subset_template[np.newaxis, ...],
-                    interpolated_with_conf.shape[0],
-                    axis=0,
-                )
-                transition_frames_np = sequence_to_frames_mm(
-                    interpolated_with_conf,
-                    repeated_subset,
-                    ref_pixels.shape[1],
-                    ref_pixels.shape[2],
-                )
+            if transition_frames_np is not None:
                 pose_pixels_interp = torch.from_numpy(transition_frames_np.copy()) / 127.5 - 1
                 pose_pixels = torch.cat([pose_pixels, pose_pixels_interp], dim=0)
-                export_dict['pose_pixels'] = pose_pixels
 
+        # Save bridge pickle file
+        export_dict = {
+            'pose_pixels': pose_pixels,
+            'keypoints_xy': entry["keypoints_xy"],
+        }
         output_path = Path(bridge_output_dir) / filename
         with open(output_path, 'wb') as fp:
             pickle.dump(export_dict, fp)
         print(f"[{filename}] saved {pose_pixels.shape[0]} frames to {output_path}, shape = {export_dict['pose_pixels'].shape}")
 
+        # Accumulate for total pickle
         if file_idx == 0:
             total_pose_pixels.append(pose_pixels)
         else:
             total_pose_pixels.append(pose_pixels[1:])
 
+        # Export main video
         video_filename = Path(filename).with_suffix(".mp4").name
         video_output_path = Path(output_dir) / video_filename
         export_video_from_frames(
@@ -290,6 +447,7 @@ def inference(
         )
         print(f"[{filename}] exported video to {video_output_path}")
 
+        # Export interpolation video if exists
         if transition_frames_np is not None:
             interp_video_path = Path(output_dir) / f"{Path(video_filename).stem}_interp.mp4"
             export_video_from_frames(
@@ -302,58 +460,26 @@ def inference(
             print(f"[{filename}] exported interpolation video to {interp_video_path}")
 
     if total_pose_pixels:
+        # Save total pickle
         total_path = Path(bridge_output_dir) / "total_20.pkl"
         concatenated = torch.cat(total_pose_pixels, dim=0)
         with open(total_path, 'wb') as fp:
             pickle.dump({'pose_pixels': concatenated}, fp)
         print(f"[total.pkl] saved concatenated pose_pixels with shape {concatenated.shape} to {total_path}")
 
-        # Export total.mp4 with all frames concatenated
+        # Generate total.mp4 with all frames concatenated
         total_video_frames = []
         for file_idx, entry in enumerate(file_entries):
-            video_poses = entry["video_poses"]
-            total_video_frames.append(video_poses)
+            total_video_frames.append(entry["video_poses"])
 
-            # Add interpolation frames if they exist
-            if interp_frames > 0 and file_idx < len(file_entries) - 1:
-                next_entry = file_entries[file_idx + 1]
-                per_pair_steps = interp_frames + 2
-
-                start_pose_xy = entry["keypoints_xy"][-1]
-                end_pose_xy = next_entry["keypoints_xy"][0]
-                interpolated = interpolate_xy(
-                    start_pose_xy,
-                    end_pose_xy,
-                    num_steps=per_pair_steps,
-                    drop_endpoints=True,
+            # Add interpolation frames between consecutive videos
+            if file_idx < len(file_entries) - 1:
+                transition_frames = generate_interpolation_frames(
+                    entry, file_entries[file_idx + 1], interp_frames,
+                    ref_pixels.shape[1], ref_pixels.shape[2]
                 )
-
-                if interpolated.size > 0:
-                    start_conf = entry["keypoints_with_conf"][-1, :, 2]
-                    end_conf = next_entry["keypoints_with_conf"][0, :, 2]
-                    alphas = np.linspace(0.0, 1.0, per_pair_steps, dtype=np.float32)[1:-1]
-                    conf_interp = (
-                        (1.0 - alphas[:, None]) * start_conf[None, :]
-                        + alphas[:, None] * end_conf[None, :]
-                    )
-                    interpolated_with_conf = np.concatenate(
-                        [interpolated, conf_interp[..., np.newaxis]],
-                        axis=-1,
-                    )
-
-                    subset_template = entry["subset"][-1]
-                    repeated_subset = np.repeat(
-                        subset_template[np.newaxis, ...],
-                        interpolated_with_conf.shape[0],
-                        axis=0,
-                    )
-                    transition_frames_np = sequence_to_frames_mm(
-                        interpolated_with_conf,
-                        repeated_subset,
-                        ref_pixels.shape[1],
-                        ref_pixels.shape[2],
-                    )
-                    total_video_frames.append(transition_frames_np)
+                if transition_frames is not None:
+                    total_video_frames.append(transition_frames)
 
         if total_video_frames:
             total_frames_concat = np.concatenate(total_video_frames, axis=0)
