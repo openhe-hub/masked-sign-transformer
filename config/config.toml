@@ -9,7 +9,7 @@ ref_img_pose_im = "./assets/pose/test2.pkl"
 sequence_length = 16          # 输入序列的长度（看过去多少帧）
 n_kps = 69                   # 每帧的关键点数量
 features_per_kp = 3           # 每个关键点的特征数 (x, y) # confidence
-limit = 200
+limit = 5
 
 [model]
 version = "v3"                # Model version to use

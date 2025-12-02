@@ -80,6 +80,7 @@ def to_numpy_subset(subset_list: Optional[Iterable[np.ndarray]], seq_len: int) -
 def inference(
     checkpoint_path: str,
     output_dir: str,
+    bridge_output_dir: str,
     window_stride: Optional[int],
     height: int,
     width: int,
@@ -193,7 +194,7 @@ def inference(
         accumulated_keypoints_with_conf[filename].append(reconstructed_with_conf)
         accumulated_subsets[filename].append(subset)
 
-    os.makedirs("output/bridge/test_interpolate", exist_ok=True)
+    os.makedirs(bridge_output_dir, exist_ok=True)
     file_entries: List[Dict[str, np.ndarray]] = []
     for filename in tqdm(filename_order, desc="Aggregating clips", unit="file"):
         frame_chunks = accumulated_sequences[filename]
@@ -268,7 +269,7 @@ def inference(
                 pose_pixels = torch.cat([pose_pixels, pose_pixels_interp], dim=0)
                 export_dict['pose_pixels'] = pose_pixels
 
-        output_path = Path("output/bridge/test_interpolate") / filename
+        output_path = Path(bridge_output_dir) / filename
         with open(output_path, 'wb') as fp:
             pickle.dump(export_dict, fp)
         print(f"[{filename}] saved {pose_pixels.shape[0]} frames to {output_path}, shape = {export_dict['pose_pixels'].shape}")
@@ -301,11 +302,70 @@ def inference(
             print(f"[{filename}] exported interpolation video to {interp_video_path}")
 
     if total_pose_pixels:
-        total_path = Path("output/bridge/test_interpolate") / "total_20.pkl"
+        total_path = Path(bridge_output_dir) / "total_20.pkl"
         concatenated = torch.cat(total_pose_pixels, dim=0)
         with open(total_path, 'wb') as fp:
             pickle.dump({'pose_pixels': concatenated}, fp)
         print(f"[total.pkl] saved concatenated pose_pixels with shape {concatenated.shape} to {total_path}")
+
+        # Export total.mp4 with all frames concatenated
+        total_video_frames = []
+        for file_idx, entry in enumerate(file_entries):
+            video_poses = entry["video_poses"]
+            total_video_frames.append(video_poses)
+
+            # Add interpolation frames if they exist
+            if interp_frames > 0 and file_idx < len(file_entries) - 1:
+                next_entry = file_entries[file_idx + 1]
+                per_pair_steps = interp_frames + 2
+
+                start_pose_xy = entry["keypoints_xy"][-1]
+                end_pose_xy = next_entry["keypoints_xy"][0]
+                interpolated = interpolate_xy(
+                    start_pose_xy,
+                    end_pose_xy,
+                    num_steps=per_pair_steps,
+                    drop_endpoints=True,
+                )
+
+                if interpolated.size > 0:
+                    start_conf = entry["keypoints_with_conf"][-1, :, 2]
+                    end_conf = next_entry["keypoints_with_conf"][0, :, 2]
+                    alphas = np.linspace(0.0, 1.0, per_pair_steps, dtype=np.float32)[1:-1]
+                    conf_interp = (
+                        (1.0 - alphas[:, None]) * start_conf[None, :]
+                        + alphas[:, None] * end_conf[None, :]
+                    )
+                    interpolated_with_conf = np.concatenate(
+                        [interpolated, conf_interp[..., np.newaxis]],
+                        axis=-1,
+                    )
+
+                    subset_template = entry["subset"][-1]
+                    repeated_subset = np.repeat(
+                        subset_template[np.newaxis, ...],
+                        interpolated_with_conf.shape[0],
+                        axis=0,
+                    )
+                    transition_frames_np = sequence_to_frames_mm(
+                        interpolated_with_conf,
+                        repeated_subset,
+                        ref_pixels.shape[1],
+                        ref_pixels.shape[2],
+                    )
+                    total_video_frames.append(transition_frames_np)
+
+        if total_video_frames:
+            total_frames_concat = np.concatenate(total_video_frames, axis=0)
+            total_video_path = Path(output_dir) / "total.mp4"
+            export_video_from_frames(
+                total_frames_concat,
+                total_video_path,
+                fps=fps,
+                height=height,
+                width=width,
+            )
+            print(f"[total.mp4] exported concatenated video with {total_frames_concat.shape[0]} frames to {total_video_path}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -316,8 +376,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="output/video/test_interpolate",
+        default="output/video/test_interpolate2",
         help="Directory to store merged videos.",
+    )
+    parser.add_argument(
+        "--bridge-output-dir",
+        type=str,
+        default="output/bridge/test_interpolate2",
+        help="Directory to store bridge pickle files.",
     )
     parser.add_argument(
         "--window-stride",
@@ -332,7 +398,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--interp-frames",
         type=int,
-        default=20,
+        default=5,
         help="Number of in-between frames to synthesize per pair using XY interpolation.",
     )
     args = parser.parse_args()
@@ -346,6 +412,7 @@ if __name__ == "__main__":
     inference(
         checkpoint_path=args.checkpoint,
         output_dir=args.output_dir,
+        bridge_output_dir=args.bridge_output_dir,
         window_stride=args.window_stride,
         height=args.height,
         width=args.width,

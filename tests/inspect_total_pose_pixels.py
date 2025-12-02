@@ -49,8 +49,8 @@ def main() -> None:
     parser.add_argument(
         "--path",
         type=Path,
-        default=Path("output/bridge/chatsign_50k_bridge/total.pkl"),
-        help="Path to total.pkl (default: output/bridge/chatsign_50k_bridge/total.pkl)",
+        default=Path("output/bridge/test_interpolate/total_0.pkl"),
+        help="Path to total.pkl",
     )
     args = parser.parse_args()
 
