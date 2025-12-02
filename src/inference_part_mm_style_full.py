@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 import torch
 import pickle
+import toml
 from tqdm.auto import tqdm
 
 from config_loader import config
@@ -222,6 +223,104 @@ def generate_interpolation_frames(
     )
 
 
+def load_motion_groups(config_path: str) -> Dict[str, List[str]]:
+    """
+    Load all motion groups from TOML configuration.
+
+    Returns dict mapping group_name -> list of filenames (basename only).
+    """
+    with open(config_path, 'r') as f:
+        motion_config = toml.load(f)
+
+    if 'groups' not in motion_config:
+        raise ValueError(f"No 'groups' section found in {config_path}")
+
+    all_groups = {}
+    data_dir = Path(config["data"]["data_dir"])
+
+    for group_name, group in motion_config['groups'].items():
+        file_paths = group.get('files', [])
+        if not file_paths:
+            print(f"Warning: Group '{group_name}' has no files defined (skipping)")
+            continue
+
+        # Extract basenames from paths and verify files exist
+        file_list = []
+        for file_path in file_paths:
+            file_path = Path(file_path)
+            basename = file_path.name
+
+            # Check if file exists in data_dir
+            full_path = data_dir / basename
+            if not full_path.exists():
+                # Try the path as-is if it's not in data_dir
+                if Path(file_path).exists():
+                    full_path = Path(file_path)
+                    basename = full_path.name
+                else:
+                    print(f"Warning: File not found: {basename} (skipping)")
+                    continue
+
+            file_list.append(basename)
+
+        if file_list:
+            all_groups[group_name] = file_list
+
+    return all_groups
+
+
+def load_motion_group(config_path: str, group_name: str) -> List[str]:
+    """
+    Load motion file list from TOML configuration.
+
+    Returns list of filenames (basename only) that will be looked up in data_dir.
+    """
+    with open(config_path, 'r') as f:
+        motion_config = toml.load(f)
+
+    if 'groups' not in motion_config:
+        raise ValueError(f"No 'groups' section found in {config_path}")
+
+    if group_name not in motion_config['groups']:
+        available = ', '.join(motion_config['groups'].keys())
+        raise ValueError(f"Group '{group_name}' not found. Available groups: {available}")
+
+    group = motion_config['groups'][group_name]
+    file_paths = group.get('files', [])
+
+    if not file_paths:
+        raise ValueError(f"Group '{group_name}' has no files defined")
+
+    # Extract basenames from paths and verify files exist
+    file_list = []
+    data_dir = Path(config["data"]["data_dir"])
+
+    for file_path in file_paths:
+        file_path = Path(file_path)
+        basename = file_path.name
+
+        # Check if file exists in data_dir
+        full_path = data_dir / basename
+        if not full_path.exists():
+            # Try the path as-is if it's not in data_dir
+            if Path(file_path).exists():
+                full_path = Path(file_path)
+                basename = full_path.name
+            else:
+                print(f"Warning: File not found: {basename} (skipping)")
+                continue
+
+        file_list.append(basename)
+
+    if not file_list:
+        raise ValueError(f"No valid files found for group '{group_name}'")
+
+    print(f"Loaded motion group '{group_name}': {group.get('description', 'No description')}")
+    print(f"Files to process: {file_list}")
+
+    return file_list
+
+
 def inference(
     checkpoint_path: str,
     output_dir: str,
@@ -232,6 +331,8 @@ def inference(
     fps: int,
     seed: int,
     interp_frames: int,
+    motion_config: Optional[str] = None,
+    motion_group: Optional[str] = None,
 ) -> None:
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -246,7 +347,18 @@ def inference(
     model.load_state_dict(state_dict)
     model.eval()
 
-    dataset = PoseDatasetV3Continuous(window_stride=window_stride)
+    # Load file list from motion group if specified
+    file_list = None
+    if motion_config and motion_group:
+        file_list = load_motion_group(motion_config, motion_group)
+        # Create subdirectory for motion group
+        output_dir = str(Path(output_dir) / motion_group)
+        bridge_output_dir = str(Path(bridge_output_dir) / motion_group)
+        print(f"Using motion group output directories:")
+        print(f"  Videos: {output_dir}")
+        print(f"  Bridge: {bridge_output_dir}")
+
+    dataset = PoseDatasetV3Continuous(window_stride=window_stride, file_list=file_list)
     os.makedirs(output_dir, exist_ok=True)
 
     accumulated_sequences: Dict[str, List[np.ndarray]] = {}
@@ -460,12 +572,16 @@ def inference(
             print(f"[{filename}] exported interpolation video to {interp_video_path}")
 
     if total_pose_pixels:
-        # Save total pickle
-        total_path = Path(bridge_output_dir) / "total_20.pkl"
+        # Save total pickle with group name
+        if motion_group:
+            total_filename = f"total_{motion_group}.pkl"
+        else:
+            total_filename = "total_20.pkl"
+        total_path = Path(bridge_output_dir) / total_filename
         concatenated = torch.cat(total_pose_pixels, dim=0)
         with open(total_path, 'wb') as fp:
             pickle.dump({'pose_pixels': concatenated}, fp)
-        print(f"[total.pkl] saved concatenated pose_pixels with shape {concatenated.shape} to {total_path}")
+        print(f"[{total_filename}] saved concatenated pose_pixels with shape {concatenated.shape} to {total_path}")
 
         # Generate total.mp4 with all frames concatenated
         total_video_frames = []
@@ -524,25 +640,87 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--interp-frames",
         type=int,
-        default=5,
+        default=10,
         help="Number of in-between frames to synthesize per pair using XY interpolation.",
+    )
+    parser.add_argument(
+        "--motion-config",
+        type=str,
+        default=None,
+        help="Path to TOML file containing motion group configurations.",
+    )
+    parser.add_argument(
+        "--motion-group",
+        type=str,
+        default=None,
+        help="Name of motion group to process from the config file. Use 'all' to process all groups.",
     )
     args = parser.parse_args()
     if args.interp_frames < 0:
         parser.error("--interp-frames must be non-negative.")
+    if (args.motion_config is None) != (args.motion_group is None):
+        parser.error("--motion-config and --motion-group must be used together")
     return args
 
 
 if __name__ == "__main__":
     args = parse_args()
-    inference(
-        checkpoint_path=args.checkpoint,
-        output_dir=args.output_dir,
-        bridge_output_dir=args.bridge_output_dir,
-        window_stride=args.window_stride,
-        height=args.height,
-        width=args.width,
-        fps=args.fps,
-        seed=args.seed,
-        interp_frames=args.interp_frames,
-    )
+
+    # Handle 'all' groups option
+    if args.motion_config and args.motion_group == "all":
+        all_groups = load_motion_groups(args.motion_config)
+        print(f"Processing all groups: {list(all_groups.keys())}")
+
+        for group_name in all_groups.keys():
+            print(f"\n{'='*60}")
+            print(f"Processing group: {group_name}")
+            print(f"{'='*60}\n")
+
+            inference(
+                checkpoint_path=args.checkpoint,
+                output_dir=args.output_dir,
+                bridge_output_dir=args.bridge_output_dir,
+                window_stride=args.window_stride,
+                height=args.height,
+                width=args.width,
+                fps=args.fps,
+                seed=args.seed,
+                interp_frames=args.interp_frames,
+                motion_config=args.motion_config,
+                motion_group=group_name,
+            )
+
+        # Collect all total files into a single directory
+        print(f"\n{'='*60}")
+        print(f"Collecting all total files...")
+        print(f"{'='*60}\n")
+
+        import shutil
+        all_totals_dir = Path(args.bridge_output_dir) / "all_totals"
+        os.makedirs(all_totals_dir, exist_ok=True)
+
+        for group_name in all_groups.keys():
+            source_file = Path(args.bridge_output_dir) / group_name / f"total_{group_name}.pkl"
+            if source_file.exists():
+                dest_file = all_totals_dir / f"total_{group_name}.pkl"
+                shutil.copy2(source_file, dest_file)
+                print(f"Copied {source_file.name} to {all_totals_dir}")
+
+        print(f"\nAll total files collected in: {all_totals_dir}")
+        print(f"\n{'='*60}")
+        print(f"All groups processed successfully!")
+        print(f"{'='*60}")
+    else:
+        inference(
+            checkpoint_path=args.checkpoint,
+            output_dir=args.output_dir,
+            bridge_output_dir=args.bridge_output_dir,
+            window_stride=args.window_stride,
+            height=args.height,
+            width=args.width,
+            fps=args.fps,
+            seed=args.seed,
+            interp_frames=args.interp_frames,
+            motion_config=args.motion_config,
+            motion_group=args.motion_group,
+        )

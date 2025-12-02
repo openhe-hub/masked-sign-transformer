@@ -1,0 +1,47 @@
+# Motion group configurations for inference
+# Each group defines a sequence of motion files to process
+
+[groups.group1]
+description = "Motion group 1"
+files = [
+    "data/chatsign_50k_norm/007diq0k5t_kps.pkl",
+    "data/chatsign_50k_norm/00dfosh03o_kps.pkl",
+    "data/chatsign_50k_norm/00fyz5gaeq_kps.pkl",
+    "data/chatsign_50k_norm/00nnoh7g9f_kps.pkl",
+]
+
+[groups.group2]
+description = "Motion group 2"
+files = [
+    "data/chatsign_50k_norm/00mvc2hvbq_kps.pkl",
+    "data/chatsign_50k_norm/00oh8kdzz4_kps.pkl",
+    "data/chatsign_50k_norm/00pb2cui7s_kps.pkl",
+    "data/chatsign_50k_norm/00rzldriu7_kps.pkl",
+]
+
+[groups.group3]
+description = "Motion group 3"
+files = [
+    "data/chatsign_50k_norm/00spj2zqs4_kps.pkl",
+    "data/chatsign_50k_norm/00ss8ql1bo_kps.pkl",
+    "data/chatsign_50k_norm/00tz38mspl_kps.pkl",
+    "data/chatsign_50k_norm/00vwqlyt4n_kps.pkl",
+]
+
+[groups.group4]
+description = "Motion group 4"
+files = [
+    "data/chatsign_50k_norm/00x1cklwh5_kps.pkl",
+    "data/chatsign_50k_norm/015zqjztdd_kps.pkl",
+    "data/chatsign_50k_norm/01gdgtc7rt_kps.pkl",
+    "data/chatsign_50k_norm/01naqurrjp_kps.pkl",
+]
+
+[groups.group5]
+description = "Motion group 5"
+files = [
+    "data/chatsign_50k_norm/01tsmc2sxz_kps.pkl",
+    "data/chatsign_50k_norm/01vbo4hc7p_kps.pkl",
+    "data/chatsign_50k_norm/01y4r7uktc_kps.pkl",
+    "data/chatsign_50k_norm/022d60k75w_kps.pkl",
+]

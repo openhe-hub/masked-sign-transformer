@@ -21,7 +21,7 @@ class PoseDatasetV3Continuous(Dataset):
     overlap. Remaining tail frames are covered by including the last possible window.
     """
 
-    def __init__(self, window_stride: Optional[int] = None):
+    def __init__(self, window_stride: Optional[int] = None, file_list: Optional[List[str]] = None):
         self.sequence_length = config["data"]["sequence_length"]
         self.n_kps = config["data"]["n_kps"]
         self.features_per_kp = config["data"]["features_per_kp"]
@@ -32,9 +32,13 @@ class PoseDatasetV3Continuous(Dataset):
 
         self.window_stride = max(1, window_stride or self.sequence_length)
 
-        self.pkl_files = [f for f in os.listdir(self.data_path) if f.endswith(".pkl")]
-        if 0 < self.limit <= len(self.pkl_files):
-            self.pkl_files = self.pkl_files[0: self.limit]
+        # Use provided file list or scan directory
+        if file_list is not None:
+            self.pkl_files = file_list
+        else:
+            self.pkl_files = [f for f in os.listdir(self.data_path) if f.endswith(".pkl")]
+            if 0 < self.limit <= len(self.pkl_files):
+                self.pkl_files = self.pkl_files[0: self.limit]
 
         self.parts: List[str] = list(PART_KP_INDICES.keys())
         self.part_kps: Dict[str, int] = {part: len(indices) for part, indices in PART_KP_INDICES.items()}
